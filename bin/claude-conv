@@ -1,0 +1,484 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "click==8.3.3",
+# ]
+# ///
+"""Read your own local Claude Code conversation history.
+
+Claude Code writes every session to `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`
+— one JSON-lines file per session, in (roughly) the Anthropic Messages API shape:
+each line is an event with a `type` (`user` / `assistant` / bookkeeping types like
+`mode`, `file-history-snapshot`, `attachment`), and `message.content` is either a
+plain string or a list of content blocks (`text`, `thinking`, `tool_use`,
+`tool_result`). This is the personal-history counterpart to the iMessage/WhatsApp/
+Slack/Telegram readers: list "chats" (projects you've worked in), read a session's
+transcript, search across everything.
+
+Two things drive the design:
+
+* **The directory name is not the source of truth for the project path.** Claude
+  Code encodes the cwd by replacing path separators with `-`, which is lossy (a
+  real dash in a folder name is indistinguishable from an encoded slash). Every
+  event line carries the *actual* `cwd` string instead, so that's what this CLI
+  reads — the directory name is only ever used to locate the files.
+* **A "chat" here is a project, not a person.** There's no chat partner to
+  message — this is a read-only history of your own sessions with Claude Code
+  in a given codebase. `chats` lists projects (most recently active first),
+  `sessions <query>` lists individual sessions within a matched project, `read`
+  renders one session as a dialogue, `search` full-text-searches across all of
+  them.
+
+Nothing here is ever written back — Claude Code owns these files.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+import click
+
+logging.basicConfig(
+    level=logging.WARNING, format="%(levelname)s: %(message)s", stream=sys.stderr
+)
+log = logging.getLogger("claude-conv")
+
+CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
+PROJECTS_DIR = CLAUDE_HOME / "projects"
+
+_SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+_COMMAND_WRAPPER_RE = re.compile(
+    r"<command-message>.*?</command-message>\s*<command-name>(.*?)</command-name>",
+    re.DOTALL,
+)
+
+
+# ---------------------------------------------------------------------------
+# Reading transcripts
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Turn:
+    ts: str  # ISO 8601, as stored
+    role: str  # "user" | "assistant"
+    blocks: list[dict] = field(default_factory=list)
+
+
+def _session_files(project_dir: Path) -> list[Path]:
+    """This project's session transcripts, most recently modified first."""
+    return sorted(
+        (p for p in project_dir.glob("*.jsonl") if p.is_file()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _iter_project_dirs():
+    if not PROJECTS_DIR.is_dir():
+        raise click.ClickException(
+            f"{PROJECTS_DIR} not found — is this a machine with Claude Code history?"
+        )
+    for entry in PROJECTS_DIR.iterdir():
+        if entry.is_dir() and _session_files(entry):
+            yield entry
+
+
+def _normalize_content(content) -> list[dict]:
+    """`message.content` is either a bare string or a list of content blocks."""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if isinstance(content, list):
+        return [b for b in content if isinstance(b, dict)]
+    return []
+
+
+def _iter_turns(path: Path, include_subagents: bool = False):
+    """Yield Turn objects for the real conversation (user/assistant) events.
+
+    Bookkeeping line types (`mode`, `file-history-snapshot`, `attachment`, ...)
+    and, by default, subagent/sidechain branches are skipped.
+    """
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") not in ("user", "assistant"):
+                continue
+            if event.get("isSidechain") and not include_subagents:
+                continue
+            message = event.get("message") or {}
+            role = message.get("role") or event.get("type")
+            blocks = _normalize_content(message.get("content"))
+            if not blocks:
+                continue
+            yield Turn(ts=event.get("timestamp", ""), role=role, blocks=blocks)
+
+
+def _session_cwd(path: Path) -> str | None:
+    """The working directory this session *started* in (its first recorded
+    `cwd`). A single session can `cd` around afterwards — later events carry
+    whatever the shell's cwd was at that point, not the session's identity —
+    so this intentionally only looks at the first line that has one."""
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            cwd = event.get("cwd")
+            if cwd:
+                return cwd
+    return None
+
+
+def _encode_path(cwd: str) -> str:
+    """Reproduce Claude Code's lossy directory-name encoding for a cwd (every
+    `/` and `.` becomes `-`), so a candidate cwd can be checked against a real
+    project-directory name on disk."""
+    return re.sub(r"[/.]", "-", cwd)
+
+
+def _project_cwd(project_dir: Path) -> str:
+    """The cwd that identifies this project directory.
+
+    A session's *first* `cwd` isn't reliable for this: a session can start in
+    a parent repo and only `cd` into e.g. a git worktree afterwards (seen in
+    practice — Claude Code still files it under the worktree's encoded
+    directory name). So instead this scans the `cwd` values actually seen
+    across the project's files and picks whichever one re-encodes to exactly
+    this directory's name — the one Claude Code itself used to name it.
+    Falls back to the newest file's first cwd, then the raw directory name.
+    """
+    files = _session_files(project_dir)
+    fallback = None
+    for path in files:
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cwd = event.get("cwd")
+                if not cwd:
+                    continue
+                if fallback is None:
+                    fallback = cwd
+                if _encode_path(cwd) == project_dir.name:
+                    return cwd
+    return fallback or project_dir.name
+
+
+def _clean_text(text: str) -> str:
+    """Strip noise not meaningful to a human reader of the transcript."""
+    text = _SYSTEM_REMINDER_RE.sub("", text)
+    text = _COMMAND_WRAPPER_RE.sub(lambda m: m.group(1), text)
+    return text.strip()
+
+
+def _tool_summary(block: dict) -> str:
+    name = block.get("name", "?")
+    tool_input = block.get("input", {})
+    snippet = json.dumps(tool_input, ensure_ascii=False)
+    if len(snippet) > 120:
+        snippet = snippet[:117] + "..."
+    return f"→ {name}({snippet})"
+
+
+def _tool_result_summary(block: dict) -> str:
+    content = block.get("content")
+    if isinstance(content, list):
+        text = " ".join(
+            b.get("text", "") for b in content if isinstance(b, dict) and b.get("text")
+        )
+    else:
+        text = str(content or "")
+    text = text.replace("\n", " ").strip()
+    if len(text) > 200:
+        text = text[:197] + "..."
+    return f"← {text}"
+
+
+def _render_turn(turn: Turn, raw: bool) -> str | None:
+    """One display line (or None if nothing worth showing, e.g. a bare tool
+    round-trip hidden in compact mode)."""
+    parts: list[str] = []
+    tool_calls: list[str] = []
+    for block in turn.blocks:
+        bt = block.get("type")
+        if bt == "text":
+            cleaned = _clean_text(block.get("text", ""))
+            if cleaned:
+                parts.append(cleaned)
+        elif bt == "thinking" and raw:
+            thinking = block.get("thinking", "").strip()
+            if thinking:
+                parts.append(f"[thinking] {thinking}")
+        elif bt == "tool_use":
+            if raw:
+                parts.append(_tool_summary(block))
+            else:
+                tool_calls.append(block.get("name", "?"))
+        elif bt == "tool_result" and raw:
+            parts.append(_tool_result_summary(block))
+    if not parts and tool_calls:
+        parts.append(f"(used tool: {', '.join(tool_calls)} — use --raw for details)")
+    if not parts:
+        return None
+    return "\n".join(parts)
+
+
+def _local_ts(iso_ts: str) -> str:
+    if not iso_ts:
+        return "?"
+    try:
+        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    except ValueError:
+        return iso_ts
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _session_title(path: Path, max_len: int = 100) -> str:
+    """First substantive thing the user said, as a stand-in for a chat title —
+    Claude Code doesn't store one."""
+    for turn in _iter_turns(path):
+        if turn.role != "user":
+            continue
+        rendered = _render_turn(turn, raw=False)
+        if rendered:
+            title = rendered.replace("\n", " ").strip()
+            return title[: max_len - 1] + "…" if len(title) > max_len else title
+    return "(untitled session)"
+
+
+def _session_summary(path: Path) -> dict:
+    turns = list(_iter_turns(path))
+    first_ts = turns[0].ts if turns else ""
+    last_ts = turns[-1].ts if turns else ""
+    return {
+        "uuid": path.stem,
+        "path": str(path),
+        "cwd": _session_cwd(path) or "?",
+        "start": first_ts,
+        "end": last_ts,
+        "turns": len(turns),
+        "title": _session_title(path),
+    }
+
+
+def _project_summary(project_dir: Path) -> dict:
+    files = _session_files(project_dir)
+    last_mtime = files[0].stat().st_mtime if files else 0
+    return {
+        "cwd": _project_cwd(project_dir),
+        "dir": project_dir.name,
+        "sessions": len(files),
+        "last_active": datetime.fromtimestamp(last_mtime).strftime("%Y-%m-%d %H:%M")
+        if last_mtime
+        else "?",
+        "last_active_epoch": last_mtime,
+    }
+
+
+def _match_projects(query: str) -> list[Path]:
+    needle = query.lower()
+    return sorted(
+        (
+            d
+            for d in _iter_project_dirs()
+            if needle in _project_cwd(d).lower() or needle in d.name.lower()
+        ),
+        key=lambda d: _session_files(d)[0].stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _resolve_one_project(query: str, match: int) -> Path:
+    candidates = _match_projects(query)
+    if not candidates:
+        raise click.ClickException(f"No project matches {query!r}.")
+    if len(candidates) > 1 and not match:
+        click.echo(f"Multiple projects match {query!r} — pick with --match N:", err=True)
+        for i, d in enumerate(candidates[:20], 1):
+            summary = _project_summary(d)
+            click.echo(f"  {i}. {summary['cwd']}  ({summary['sessions']} sessions)", err=True)
+        raise SystemExit(1)
+    return candidates[match - 1 if match else 0]
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+def cli() -> None:
+    """Read your local Claude Code conversation history (read-only)."""
+
+
+@cli.command()
+@click.option("--limit", default=30, help="Number of projects to list.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def chats(limit: int, as_json: bool) -> None:
+    """List projects ("chats"), most recently active first."""
+    projects = sorted(
+        (_project_summary(d) for d in _iter_project_dirs()),
+        key=lambda s: s["last_active_epoch"],
+        reverse=True,
+    )[:limit]
+    if as_json:
+        click.echo(json.dumps(projects, ensure_ascii=False))
+        return
+    for p in projects:
+        click.echo(f"{p['last_active']}  {p['cwd']}  ({p['sessions']} sessions)")
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--limit", default=30, help="Number of sessions to list.")
+@click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def sessions(query: str, limit: int, match: int, as_json: bool) -> None:
+    """List sessions within the project matching QUERY, most recent first."""
+    project = _resolve_one_project(query, match)
+    files = _session_files(project)[:limit]
+    out = [_session_summary(f) for f in files]
+    if as_json:
+        click.echo(json.dumps(out, ensure_ascii=False))
+        return
+    cwd = out[0]["cwd"] if out else project.name
+    click.echo(f"# {cwd} — {len(out)} session(s), most recently active first\n")
+    for s in out:
+        last = s["end"] or s["start"]
+        click.echo(f"{_local_ts(last)}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--session", "session_uuid", help="Exact session UUID (or prefix) instead of the Nth most recent.")
+@click.option("--nth", default=1, help="Which session to read, 1 = most recent (default).")
+@click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
+@click.option("--limit", default=0, help="Only show the last N turns (0 = all).")
+@click.option("--raw", is_flag=True, help="Include thinking blocks and tool calls/results.")
+@click.option("--include-subagents", is_flag=True, help="Include forked subagent turns.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def read(
+    query: str,
+    session_uuid: str | None,
+    nth: int,
+    match: int,
+    limit: int,
+    raw: bool,
+    include_subagents: bool,
+    as_json: bool,
+) -> None:
+    """Render a session's transcript from the project matching QUERY.
+
+    Defaults to that project's most recently active session; pick another with
+    --nth (1 = most recent, 2 = the one before, ...) or target an exact
+    --session UUID.
+    """
+    project = _resolve_one_project(query, match)
+    files = _session_files(project)
+    if session_uuid:
+        matches = [f for f in files if f.stem.startswith(session_uuid)]
+        if not matches:
+            raise click.ClickException(f"No session {session_uuid!r} in this project.")
+        path = matches[0]
+    else:
+        if nth < 1 or nth > len(files):
+            raise click.ClickException(f"--nth {nth} out of range (1..{len(files)}).")
+        path = files[nth - 1]
+
+    turns = list(_iter_turns(path, include_subagents=include_subagents))
+    if limit:
+        turns = turns[-limit:]
+
+    out = []
+    for t in turns:
+        rendered = _render_turn(t, raw=raw)
+        if rendered is None:
+            continue
+        out.append({"ts": t.ts, "role": t.role, "text": rendered})
+
+    if as_json:
+        click.echo(json.dumps(out, ensure_ascii=False))
+        return
+    cwd = _session_cwd(path) or project.name
+    click.echo(f"# {cwd} — session {path.stem} — {len(out)} turns\n")
+    for m in out:
+        click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
+
+
+@cli.command()
+@click.argument("text")
+@click.option("--project", "project_query", help="Restrict to projects matching this query (default: all).")
+@click.option("--limit", default=50, help="Number of matches to show.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def search(text: str, project_query: str | None, limit: int, as_json: bool) -> None:
+    """Full-text search across session transcripts.
+
+    A cheap substring pre-filter runs on the raw JSONL bytes before any JSON
+    parsing, so searching everywhere stays fast even with a lot of history.
+    """
+    needle = text.lower()
+    needle_bytes = text.encode("utf-8")
+    project_dirs = _match_projects(project_query) if project_query else list(_iter_project_dirs())
+
+    results = []
+    for project_dir in project_dirs:
+        for path in _session_files(project_dir):
+            with path.open("rb") as f:
+                if needle_bytes.lower() not in f.read().lower():
+                    continue
+            cwd = _session_cwd(path) or project_dir.name
+            for turn in _iter_turns(path):
+                rendered = _render_turn(turn, raw=False)
+                if not rendered or needle not in rendered.lower():
+                    continue
+                snippet = rendered.replace("\n", " ")
+                if len(snippet) > 200:
+                    idx = snippet.lower().find(needle)
+                    start = max(0, idx - 80)
+                    snippet = ("…" if start else "") + snippet[start : start + 200] + "…"
+                results.append(
+                    {
+                        "ts": turn.ts,
+                        "cwd": cwd,
+                        "session": path.stem,
+                        "role": turn.role,
+                        "text": snippet,
+                    }
+                )
+                if len(results) >= limit:
+                    break
+            if len(results) >= limit:
+                break
+        if len(results) >= limit:
+            break
+
+    results.sort(key=lambda r: r["ts"], reverse=True)
+    if as_json:
+        click.echo(json.dumps(results, ensure_ascii=False))
+        return
+    for r in results:
+        click.echo(f"{_local_ts(r['ts'])}  {r['cwd']}  [{r['session'][:8]}]  {r['role']}: {r['text']}")
+
+
+if __name__ == "__main__":
+    cli()
