@@ -8,11 +8,14 @@ description:
   most recently active first, `claude-conv sessions <query>` lists individual
   sessions within a matched project, `claude-conv read <query>` renders a
   session as a dialogue (defaults to the most recent), `claude-conv search
-  <text>` full-text-searches across everything. No auth, no network — it's a
-  local file reader, the counterpart to imessage-cli/whatsapp-cli/slack-user-cli
-  for your own Claude Code history. Use when the user wants to recall,
-  search, or review a past Claude Code conversation, session, or project's
-  history."
+  <text>` full-text-searches across everything, `claude-conv find <text>`
+  locates a session by its derived title (name) across every project, and
+  `claude-conv fork <query>` hands off to `claude --resume --fork-session` to
+  continue a past session as a new one (dry-run by default). No auth, no
+  network — it's a local file reader, the counterpart to
+  imessage-cli/whatsapp-cli/slack-user-cli for your own Claude Code history.
+  Use when the user wants to recall, search, review, or continue a past
+  Claude Code conversation, session, or project's history."
 ---
 
 # Claude Code conversation reader CLI
@@ -41,8 +44,9 @@ conversation** — "what did we decide about X last week", "find that
 conversation where I asked about Y", "show me the session where I built Z",
 "how many sessions have I had in project W".
 
-Read-only by construction: there is nothing to "send" into a past
-conversation.
+Everything except `fork` is read-only by construction. `fork` is the one
+command that acts — it launches a real `claude` process — and defaults to a
+dry-run, same convention as the personal-messaging CLIs' `send` commands.
 
 ## Commands
 
@@ -83,6 +87,29 @@ for details)`. Subagent/sidechain forks are excluded unless
 Full-text search across session transcripts (all projects by default, or
 scoped with `--project`). A cheap raw-bytes substring pre-filter runs before
 any JSON parsing, so this stays fast even across a lot of history.
+
+### `claude-conv find <text> [--limit N] [--json]`
+
+Find sessions **by name** — i.e. by their derived title — across every
+project. Unlike `search` (matches anywhere, one row per matching turn), `find`
+matches only the title and returns one row per session, most recently active
+first. This is the practical answer to "no title is stored" below: the title
+*is* searchable, it's just derived rather than set.
+
+### `claude-conv fork <query> [--nth N] [--session UUID] [--match N] [--yes]`
+
+Continue a past session as a **new** session, via Claude Code's own
+`claude --resume <uuid> --fork-session` — the original session is left
+untouched, exactly like branching in git. Resolves the session the same way
+`read` does. **Defaults to a dry-run** that prints the resolved session and
+the command that would run; pass `--yes` to actually launch it (this replaces
+the current process and hands the terminal off to a real, writable
+interactive `claude` session — run it from an actual terminal, not scripted).
+
+```bash
+bin/claude-conv fork zama                     # dry-run: shows what would launch
+bin/claude-conv fork zama --session 573496f4 --yes  # actually fork that session
+```
 
 ## Notes
 

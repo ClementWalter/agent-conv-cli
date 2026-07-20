@@ -8,6 +8,8 @@ claude-conv chats                   # projects you've worked in, most recent fir
 claude-conv sessions "zama"         # sessions within a matched project
 claude-conv read "zama"             # render the most recent session as a dialogue
 claude-conv search "vault-update"   # full-text search across everything
+claude-conv find "vault-update"     # find a session by name (its derived title)
+claude-conv fork "zama" --yes       # continue a past session as a new one
 ```
 
 Claude Code writes every session to
@@ -78,14 +80,19 @@ claude-conv read zama --limit 20         # only the last 20 turns
 claude-conv read zama --raw              # include thinking + tool call/result blocks
 claude-conv search "vault-update"        # full-text search across every project
 claude-conv search "vault-update" --project zama  # scoped to one project
+claude-conv find "vault-update"          # find a session by its derived title (name)
+claude-conv fork zama                    # dry-run: shows the session + command it'd launch
+claude-conv fork zama --session 573496f4 --yes  # actually fork that session
 ```
 
 `claude-conv --help` lists every subcommand; `claude-conv <cmd> --help` for
 per-command options including `--json`, `--limit`, `--match`, `--nth`,
-`--session`, `--raw`, `--include-subagents`.
+`--session`, `--raw`, `--include-subagents`, `--yes`.
 
-Every command supports `--json` for structured output. There is no write path
-— this is a pure reader.
+Every command supports `--json` for structured output. Only `fork` writes
+anything — and what it "writes" is a brand-new session ID via Claude Code's
+own `--fork-session`, launched as a real interactive process; it defaults to
+a dry-run, same convention as the personal-messaging CLIs' `send` commands.
 
 ## How it works
 
@@ -108,6 +115,15 @@ Every command supports `--json` for structured output. There is no write path
   pass `--include-subagents` to include them.
 - **Search is a two-stage filter**: a substring check on raw file bytes before
   any JSON parsing, so a workspace with a lot of history stays fast to search.
+- **No title is stored** — Claude Code doesn't persist a session name (the
+  ephemeral `~/.claude/sessions/<pid>.json` pointer file has one while a
+  session is running, but it isn't written into the transcript itself), so
+  `find`/`sessions`/`read` all derive one from the first substantive user
+  message instead.
+- **`fork` hands off to a real `claude` process** via `os.execvp`, replacing
+  this script entirely so the resumed session gets a proper interactive
+  terminal — it `cd`s to the original session's directory first, then runs
+  `claude --resume <uuid> --fork-session`.
 
 ## Dependencies
 

@@ -28,9 +28,14 @@ Two things drive the design:
   in a given codebase. `chats` lists projects (most recently active first),
   `sessions <query>` lists individual sessions within a matched project, `read`
   renders one session as a dialogue, `search` full-text-searches across all of
-  them.
+  them, `find` locates a session by its derived title across every project,
+  and `fork` hands off to a real `claude --resume --fork-session` process to
+  continue a past session as a new one.
 
-Nothing here is ever written back — Claude Code owns these files.
+Reading is entirely local and read-only — Claude Code owns these files and
+nothing here mutates them. `fork` is the one command that acts: it shells out
+to the `claude` binary itself (a real write/launch action), and defaults to a
+dry-run like the personal-messaging CLIs' `send` commands do.
 """
 
 from __future__ import annotations
@@ -478,6 +483,98 @@ def search(text: str, project_query: str | None, limit: int, as_json: bool) -> N
         return
     for r in results:
         click.echo(f"{_local_ts(r['ts'])}  {r['cwd']}  [{r['session'][:8]}]  {r['role']}: {r['text']}")
+
+
+@cli.command()
+@click.argument("text")
+@click.option("--limit", default=30, help="Number of sessions to show.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def find(text: str, limit: int, as_json: bool) -> None:
+    """Find sessions by name — i.e. by their derived title — across every project.
+
+    Claude Code doesn't store a session title, so "name" here is the first
+    substantive thing you said in that session (same text `chats`/`sessions`
+    derive titles from). Unlike `search`, which matches anywhere in a
+    transcript and returns one row per matching turn, this matches only the
+    title and returns one row per session.
+    """
+    needle = text.lower()
+    needle_bytes = text.encode("utf-8")
+    results = []
+    for project_dir in _iter_project_dirs():
+        for path in _session_files(project_dir):
+            # Cheap prefilter: a title always comes from early in the file,
+            # so a raw-byte substring check on the first chunk skips most
+            # files without a full parse.
+            with path.open("rb") as f:
+                head = f.read(8192)
+            if needle_bytes.lower() not in head.lower():
+                continue
+            summary = _session_summary(path)
+            if needle not in summary["title"].lower():
+                continue
+            results.append(summary)
+
+    results.sort(key=lambda s: s["end"] or s["start"], reverse=True)
+    results = results[:limit]
+    if as_json:
+        click.echo(json.dumps(results, ensure_ascii=False))
+        return
+    for s in results:
+        last = s["end"] or s["start"]
+        click.echo(f"{_local_ts(last)}  {s['cwd']}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--nth", default=1, help="Which session to fork, 1 = most recent (default).")
+@click.option("--session", "session_uuid", help="Exact session UUID (or prefix) instead of the Nth most recent.")
+@click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
+@click.option("--yes", is_flag=True, help="Actually launch. Without it, prints the resolved command as a dry-run.")
+def fork(query: str, nth: int, session_uuid: str | None, match: int, yes: bool) -> None:
+    """Continue a past session as a NEW session, leaving the original untouched.
+
+    Resolves a session the same way `read` does (project QUERY + --nth /
+    --session), then hands off to `claude --resume <uuid> --fork-session` —
+    Claude Code's own mechanism for branching a past conversation into a
+    fresh session ID instead of mutating the one being resumed. This is the
+    one command that actually launches something: it replaces this process
+    and takes over the terminal for an interactive `claude` session, from the
+    original session's working directory.
+
+    Defaults to a dry-run that prints what would be launched. Pass --yes to
+    actually do it.
+    """
+    project = _resolve_one_project(query, match)
+    files = _session_files(project)
+    if session_uuid:
+        matches = [f for f in files if f.stem.startswith(session_uuid)]
+        if not matches:
+            raise click.ClickException(f"No session {session_uuid!r} in this project.")
+        path = matches[0]
+    else:
+        if nth < 1 or nth > len(files):
+            raise click.ClickException(f"--nth {nth} out of range (1..{len(files)}).")
+        path = files[nth - 1]
+
+    cwd = _session_cwd(path) or str(project)
+    title = _session_title(path)
+
+    if not yes:
+        click.echo("DRY-RUN (nothing launched). Re-run with --yes to fork.")
+        click.echo(f"  session: {path.stem}  ({title})")
+        click.echo(f"  cwd:     {cwd}")
+        click.echo(f"  command: claude --resume {path.stem} --fork-session")
+        return
+
+    if not Path(cwd).is_dir():
+        raise click.ClickException(f"{cwd!r} no longer exists on disk — can't cd there to fork.")
+    click.echo(f"Forking session {path.stem} from {cwd} ...", err=True)
+    os.chdir(cwd)
+    try:
+        os.execvp("claude", ["claude", "--resume", path.stem, "--fork-session"])
+    except FileNotFoundError:
+        raise click.ClickException("`claude` not found on PATH.")
 
 
 if __name__ == "__main__":
