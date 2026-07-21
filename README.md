@@ -12,6 +12,7 @@ claude-conv search "deploy-checklist"     # full-text search across everything
 claude-conv find "deploy-checklist"       # find a thread by name (its derived title)
 claude-conv fork "myproject" --yes        # continue a past Claude Code thread interactively, as a new one
 claude-conv send "myproject" "..." --yes  # send a message into a Claude Code thread headlessly, print the reply
+claude-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
 claude-conv unread                        # what's new since you last viewed it
 ```
 
