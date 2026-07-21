@@ -62,6 +62,12 @@ log = logging.getLogger("claude-conv")
 CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
 PROJECTS_DIR = CLAUDE_HOME / "projects"
 
+# This tool's own bookkeeping — deliberately NOT under ~/.claude, since Claude
+# Code owns that directory and this CLI never writes into it. Claude Code
+# itself has no concept of read/unread; this is purely local to claude-conv.
+STATE_DIR = Path(os.environ.get("CLAUDE_CONV_STATE_DIR", str(Path.home() / ".config" / "claude-conv-cli")))
+READ_STATE_FILE = STATE_DIR / "read-state.json"
+
 _SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 _TASK_NOTIFICATION_RE = re.compile(r"<task-notification>.*?</task-notification>", re.DOTALL)
 _COMMAND_WRAPPER_RE = re.compile(
@@ -307,10 +313,11 @@ def _session_title(path: Path, max_len: int = 100) -> str:
     return "(untitled session)"
 
 
-def _session_summary(path: Path) -> dict:
+def _session_summary(path: Path, read_state: dict | None = None) -> dict:
     turns = list(_iter_turns(path))
     first_ts = turns[0].ts if turns else ""
     last_ts = turns[-1].ts if turns else ""
+    state = read_state if read_state is not None else _load_read_state()
     return {
         "uuid": path.stem,
         "path": str(path),
@@ -319,16 +326,55 @@ def _session_summary(path: Path) -> dict:
         "end": last_ts,
         "turns": len(turns),
         "title": _session_title(path),
+        "unread": _is_unread(path, state),
     }
 
 
-def _project_summary(project_dir: Path) -> dict:
+# ---------------------------------------------------------------------------
+# Read/unread tracking (local to this CLI — see STATE_DIR/READ_STATE_FILE)
+# ---------------------------------------------------------------------------
+
+
+def _load_read_state() -> dict:
+    """{session_uuid: last-read mtime (epoch float)}."""
+    if not READ_STATE_FILE.is_file():
+        return {}
+    try:
+        return json.loads(READ_STATE_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_read_state(state: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = READ_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state))
+    tmp.replace(READ_STATE_FILE)  # atomic — a crash mid-write can't corrupt it
+
+
+def _mark_read(path: Path, state: dict) -> None:
+    """Record `path` as read up to its current mtime. Caller owns loading and
+    saving `state` so a batch of marks (`unread --mark-all-read`) writes once."""
+    state[path.stem] = path.stat().st_mtime
+
+
+def _is_unread(path: Path, state: dict) -> bool:
+    """Unread by default (never opened via `read`/marked read) — same as a
+    message you've never opened. New activity (a bigger mtime) since the last
+    mark makes it unread again."""
+    mark = state.get(path.stem)
+    return mark is None or path.stat().st_mtime > mark
+
+
+def _project_summary(project_dir: Path, read_state: dict | None = None) -> dict:
     files = _session_files(project_dir)
     last_mtime = files[0].stat().st_mtime if files else 0
+    state = read_state if read_state is not None else _load_read_state()
     return {
         "cwd": _project_cwd(project_dir),
         "dir": project_dir.name,
         "sessions": len(files),
+        "unread": sum(1 for f in files if _is_unread(f, state)),
         "last_active": datetime.fromtimestamp(last_mtime).strftime("%Y-%m-%d %H:%M")
         if last_mtime
         else "?",
@@ -403,8 +449,9 @@ def cli() -> None:
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def chats(limit: int, as_json: bool) -> None:
     """List projects ("chats"), most recently active first."""
+    state = _load_read_state()
     projects = sorted(
-        (_project_summary(d) for d in _iter_project_dirs()),
+        (_project_summary(d, read_state=state) for d in _iter_project_dirs()),
         key=lambda s: s["last_active_epoch"],
         reverse=True,
     )[:limit]
@@ -412,7 +459,8 @@ def chats(limit: int, as_json: bool) -> None:
         click.echo(json.dumps(projects, ensure_ascii=False))
         return
     for p in projects:
-        click.echo(f"{p['last_active']}  {p['cwd']}  ({p['sessions']} sessions)")
+        unread = f", {p['unread']} unread" if p["unread"] else ""
+        click.echo(f"{p['last_active']}  {p['cwd']}  ({p['sessions']} sessions{unread})")
 
 
 @cli.command()
@@ -423,8 +471,9 @@ def chats(limit: int, as_json: bool) -> None:
 def sessions(query: str, limit: int, match: int, as_json: bool) -> None:
     """List sessions within the project matching QUERY, most recent first."""
     project = _resolve_one_project(query, match)
+    state = _load_read_state()
     files = _session_files(project)[:limit]
-    out = [_session_summary(f) for f in files]
+    out = [_session_summary(f, read_state=state) for f in files]
     if as_json:
         click.echo(json.dumps(out, ensure_ascii=False))
         return
@@ -432,7 +481,8 @@ def sessions(query: str, limit: int, match: int, as_json: bool) -> None:
     click.echo(f"# {cwd} — {len(out)} session(s), most recently active first\n")
     for s in out:
         last = s["end"] or s["start"]
-        click.echo(f"{_local_ts(last)}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
+        mark = "● " if s["unread"] else "  "
+        click.echo(f"{mark}{_local_ts(last)}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
 
 
 @cli.command()
@@ -443,6 +493,7 @@ def sessions(query: str, limit: int, match: int, as_json: bool) -> None:
 @click.option("--limit", default=0, help="Only show the last N turns (0 = all).")
 @click.option("--raw", is_flag=True, help="Include thinking blocks and tool calls/results.")
 @click.option("--include-subagents", is_flag=True, help="Include forked subagent turns.")
+@click.option("--no-mark-read", is_flag=True, help="Don't mark this session as read.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def read(
     query: str,
@@ -452,13 +503,15 @@ def read(
     limit: int,
     raw: bool,
     include_subagents: bool,
+    no_mark_read: bool,
     as_json: bool,
 ) -> None:
     """Render a session's transcript from the project matching QUERY.
 
     Defaults to that project's most recently active session; pick another with
     --nth (1 = most recent, 2 = the one before, ...) or target an exact
-    --session UUID.
+    --session UUID. Marks the session read (see `unread`) unless
+    --no-mark-read is passed.
     """
     path = _resolve_one_session(query, match, nth, session_uuid)
 
@@ -474,6 +527,11 @@ def read(
         if rendered is None:
             continue
         out.append({"ts": t.ts, "role": t.role, "text": rendered})
+
+    if not no_mark_read:
+        state = _load_read_state()
+        _mark_read(path, state)
+        _save_read_state(state)
 
     if as_json:
         click.echo(json.dumps(out, ensure_ascii=False))
@@ -537,6 +595,48 @@ def search(text: str, project_query: str | None, limit: int, as_json: bool) -> N
         return
     for r in results:
         click.echo(f"{_local_ts(r['ts'])}  {r['cwd']}  [{r['session'][:8]}]  {r['role']}: {r['text']}")
+
+
+@cli.command()
+@click.option("--project", "project_query", help="Restrict to projects matching this query (default: all).")
+@click.option("--limit", default=30, help="Number of sessions to show.")
+@click.option("--mark-all-read", is_flag=True, help="Don't list anything — just mark everything currently unread as read.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def unread(project_query: str | None, limit: int, mark_all_read: bool, as_json: bool) -> None:
+    """List sessions with activity you haven't seen via `read` yet.
+
+    This is local bookkeeping only (~/.config/claude-conv-cli/read-state.json,
+    override with $CLAUDE_CONV_STATE_DIR) — Claude Code itself has no concept
+    of read/unread. A session counts as unread until you `read` it (or catch
+    up in bulk with --mark-all-read): never-opened sessions default to
+    unread, same as a message you've never opened, and new activity since the
+    last time makes it unread again. The very first run will likely show your
+    whole history as unread — run `unread --mark-all-read` once to start
+    clean, then let normal `read` usage keep it current.
+    """
+    state = _load_read_state()
+    project_dirs = _match_projects(project_query) if project_query else list(_iter_project_dirs())
+    unread_files = [f for d in project_dirs for f in _session_files(d) if _is_unread(f, state)]
+
+    if mark_all_read:
+        for f in unread_files:
+            _mark_read(f, state)
+        _save_read_state(state)
+        click.echo(f"Marked {len(unread_files)} session(s) as read.")
+        return
+
+    unread_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    results = [_session_summary(f, read_state=state) for f in unread_files[:limit]]
+
+    if as_json:
+        click.echo(json.dumps(results, ensure_ascii=False))
+        return
+    if not results:
+        click.echo("Nothing unread.")
+        return
+    for s in results:
+        last = s["end"] or s["start"]
+        click.echo(f"{_local_ts(last)}  {s['cwd']}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
 
 
 @cli.command()

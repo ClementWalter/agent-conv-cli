@@ -12,13 +12,16 @@ description:
   locates a session by its derived title (name) across every project,
   `claude-conv fork <query>` hands off to `claude --resume --fork-session` to
   continue a past session as a new one interactively (dry-run by default),
-  and `claude-conv send <query> <message>` sends a message into a session
+  `claude-conv send <query> <message>` sends a message into a session
   non-interactively and prints the reply — headless equivalent of resuming
   it and typing, appending to that same session unless `--fork` is passed
-  (dry-run by default). No auth, no network — it's a local file reader, the
-  counterpart to imessage-cli/whatsapp-cli/slack-user-cli for your own
-  Claude Code history. Use when the user wants to recall, search, review, or
-  continue a past Claude Code conversation, session, or project's history."
+  (dry-run by default) — and `claude-conv unread` lists sessions with
+  activity you haven't seen via `read` yet (local read/unread bookkeeping;
+  `read` marks a session read, `chats`/`sessions` show unread counts/markers).
+  No auth, no network — it's a local file reader, the counterpart to
+  imessage-cli/whatsapp-cli/slack-user-cli for your own Claude Code history.
+  Use when the user wants to recall, search, review, or continue a past
+  Claude Code conversation, session, or project's history."
 ---
 
 # Claude Code conversation reader CLI
@@ -56,19 +59,21 @@ convention as the personal-messaging CLIs' `send` commands.
 ### `claude-conv chats [--limit N] [--json]`
 
 List projects, most recently active first: real cwd (not the lossy encoded
-directory name), session count, last-active timestamp.
+directory name), session count, last-active timestamp, and an unread count
+when nonzero (see `unread`).
 
 ### `claude-conv sessions <query> [--limit N] [--match N] [--json]`
 
 List sessions within the project matching `<query>` (fuzzy against the real
 cwd or the encoded directory name), most recently active first: short UUID,
-turn count, and a derived title (the first substantive thing the user said —
-Claude Code doesn't store a title). Ambiguous project matches print a numbered
-list — pick with `--match N`.
+turn count, a derived title (the first substantive thing the user said —
+Claude Code doesn't store a title), and an `●` marker on unread ones.
+Ambiguous project matches print a numbered list — pick with `--match N`.
 
-### `claude-conv read <query> [--nth N] [--session UUID] [--limit N] [--raw] [--include-subagents] [--json]`
+### `claude-conv read <query> [--nth N] [--session UUID] [--limit N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
 
-Render a session's transcript from the project matching `<query>`.
+Render a session's transcript from the project matching `<query>`. Marks the
+session read (see `unread`) unless `--no-mark-read` is passed.
 
 ```bash
 bin/claude-conv read zama                    # most recently active session in a "zama" project
@@ -103,6 +108,27 @@ project. Unlike `search` (matches anywhere, one row per matching turn), `find`
 matches only the title and returns one row per session, most recently active
 first. This is the practical answer to "no title is stored" below: the title
 *is* searchable, it's just derived rather than set.
+
+### `claude-conv unread [--project QUERY] [--limit N] [--mark-all-read] [--json]`
+
+List sessions with activity you haven't seen via `read` yet, most recently
+active first. This is local bookkeeping only
+(`~/.config/claude-conv-cli/read-state.json`, override with
+`$CLAUDE_CONV_STATE_DIR`) — Claude Code itself has no concept of read/unread.
+A session you've never opened with `read` counts as unread by default, same
+as a message you've never opened; new activity since the last time it was
+marked read makes it unread again.
+
+```bash
+bin/claude-conv unread                        # everything unread, across every project
+bin/claude-conv unread --project zama         # scoped to one project
+bin/claude-conv unread --mark-all-read        # catch up in bulk instead of listing
+```
+
+The first run will likely show your whole history as unread (nothing has
+ever been marked read yet) — run `unread --mark-all-read` once to start
+clean, then normal `read` usage keeps it current. `chats` shows a per-project
+unread count and `sessions` prefixes unread rows with `●`.
 
 ### `claude-conv fork <query> [--nth N] [--session UUID] [--match N] [--yes]`
 

@@ -11,6 +11,7 @@ claude-conv search "vault-update"   # full-text search across everything
 claude-conv find "vault-update"     # find a session by name (its derived title)
 claude-conv fork "zama" --yes       # continue a past session interactively, as a new one
 claude-conv send "zama" "..." --yes # send a message into a session headlessly, print the reply
+claude-conv unread                  # what's new since you last `read` it
 ```
 
 Claude Code writes every session to
@@ -87,12 +88,15 @@ claude-conv fork zama --session 573496f4 --yes  # actually fork that session
 claude-conv send zama "what's the status of #229?"          # dry-run
 claude-conv send zama "what's the status of #229?" --yes    # appends to that same session
 claude-conv send zama "try another approach" --fork --yes   # sends into a NEW branch instead
+claude-conv unread                       # everything unread, across every project
+claude-conv unread --project zama        # scoped to one project
+claude-conv unread --mark-all-read       # catch up in bulk instead of listing
 ```
 
 `claude-conv --help` lists every subcommand; `claude-conv <cmd> --help` for
 per-command options including `--json`, `--limit`, `--match`, `--nth`,
 `--session`, `--raw`, `--include-subagents`, `--fork`, `--permission-mode`,
-`--yes`.
+`--yes`, `--no-mark-read`, `--mark-all-read`.
 
 Every read command supports `--json` for structured output. `fork` and `send`
 are the two that write: `fork` hands off to a real interactive `claude
@@ -145,6 +149,13 @@ commands.
   plan` and a tool-free prompt returns a reply in a few seconds; the
   original session's turn count is untouched and a `--fork`'d branch (with
   the reply appended) appears alongside it.
+- **Read/unread is local bookkeeping, not a Claude Code feature.** A small
+  state file (`~/.config/claude-conv-cli/read-state.json`, override with
+  `$CLAUDE_CONV_STATE_DIR`) maps each session UUID to the file mtime it was
+  last read at; `read` updates it (unless `--no-mark-read`), and a session
+  counts as unread if it's never in that map or its current mtime is newer
+  than the recorded one. Deliberately kept out of `~/.claude` — Claude Code
+  owns that directory and this CLI never writes into it.
 
 ## Dependencies
 
