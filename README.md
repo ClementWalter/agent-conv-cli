@@ -266,16 +266,10 @@ directory on macOS/Linux/Windows but has only been exercised on macOS.
 
 ## See also
 
-Same idea — your own accounts, from the terminal, reusing credentials you
-already have instead of an API/OAuth app (companion tools, same author):
+Same idea — your own messages, from the terminal, for other channels
+(companion tools, same author):
 
 - [**imessage-cli**](https://github.com/ClementWalter/imessage-cli) — your personal iMessage/SMS history
 - [**whatsapp-cli**](https://github.com/ClementWalter/whatsapp-cli) — your personal WhatsApp chats (pairs as a linked device)
 - [**slack-user-cli**](https://github.com/ClementWalter/slack-user-cli) — Slack via your existing browser session credentials
 - [**tg-cli**](https://github.com/ClementWalter/tg-cli) — your own Telegram chats via your user account (Telethon)
-- [**notion-cli**](https://github.com/ClementWalter/notion-cli) — Notion via your browser session cookie, no workspace integration/OAuth
-- **pajemploi-cli** — your Pajemploi (URSSAF) employer space: salariés, fiches, bulletins de salaire (not published yet)
-- [**ecoledirecte-cli**](https://github.com/ClementWalter/ecoledirecte-cli) — EcoleDirecte: grades, homework, timetable, messages
-- [**laposte-cli**](https://github.com/ClementWalter/laposte-cli) — send registered mail (LREL/LEL) via laposte.fr Courrier En Ligne
-- [**cafeyn-cli**](https://github.com/ClementWalter/cafeyn-cli) — read cafeyn.co articles/issues as Markdown/PDF (private repo)
-- [**bluestar-cli**](https://github.com/ClementWalter/bluestar-cli) — watch Blue Star Ferries cabin availability, alert on openings
