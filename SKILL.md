@@ -1,26 +1,26 @@
 ---
-name: claude-conv-cli
+name: agent-conv-cli
 description:
   "Read your own local Claude Code / Codex CLI / Cursor conversation history
-  from the terminal via the bundled `bin/claude-conv` command — one unified
+  from the terminal via the bundled `bin/agent-conv` command — one unified
   reader across all three. Same shape as Slack, one level up: a project is a
-  channel, a session IS a thread. `claude-conv chats` lists projects/channels
-  across every source, most recently active first, tagged. `claude-conv read
+  channel, a session IS a thread. `agent-conv chats` lists projects/channels
+  across every source, most recently active first, tagged. `agent-conv read
   <query>` mirrors Slack's `read <channel>`: bare, it lists every thread's
   anchor (title/turns/timestamp, no content); `--expand` inlines every
   thread's full content, like `--expand-thread`. A query that exactly names
   one real directory merges every source's threads for it into one list.
-  `claude-conv thread <query>` mirrors Slack's `thread <channel> <ts>`: reads
+  `agent-conv thread <query>` mirrors Slack's `thread <channel> <ts>`: reads
   exactly one thread in full (defaults to the most recent; `--nth`/`--session`
   to pick another). `--source claude|codex|cursor` scopes any command to one
-  backend. `claude-conv search <text>` full-text-searches across everything;
-  `claude-conv find <text>` locates a thread by its derived title (name)
-  across every project. `claude-conv fork <query>` hands off to `claude
+  backend. `agent-conv search <text>` full-text-searches across everything;
+  `agent-conv find <text>` locates a thread by its derived title (name)
+  across every project. `agent-conv fork <query>` hands off to `claude
   --resume --fork-session` to continue a past Claude Code thread as a new one
   interactively (dry-run by default; Claude-only — Codex/Cursor have no
-  equivalent CLI hook). `claude-conv send <query> <message>` does the same
+  equivalent CLI hook). `agent-conv send <query> <message>` does the same
   headlessly and prints the reply, appending to that same thread unless
-  `--fork` is passed (dry-run by default). `claude-conv unread` lists threads
+  `--fork` is passed (dry-run by default). `agent-conv unread` lists threads
   with activity you haven't seen yet (Claude Code/Codex: local bookkeeping;
   Cursor: its own native unread flag, read directly). No auth, no network —
   it's a local file reader, the counterpart to
@@ -54,8 +54,8 @@ rendering, cleaning, and search all work identically regardless of source.
 
 ## How to invoke
 
-Run the bundled launcher **`bin/claude-conv`** (PEP 723 — `uv` resolves deps
-inline on first run). Resolve `bin/claude-conv` against this skill's
+Run the bundled launcher **`bin/agent-conv`** (PEP 723 — `uv` resolves deps
+inline on first run). Resolve `bin/agent-conv` against this skill's
 directory; from elsewhere use the absolute path.
 
 ## Mental model
@@ -65,7 +65,7 @@ in) is a **channel**, and a **session** IS a **thread** — an anchor message
 (its first turn) plus every turn tied to it. The command set mirrors Slack's
 exactly, across all three sources at once:
 
-| Slack | claude-conv-cli |
+| Slack | agent-conv-cli |
 |---|---|
 | `channels` | `chats` |
 | `read <channel>` (flat) | bare `read <query>` (every thread's anchor) |
@@ -103,25 +103,25 @@ dry-run, same convention as the personal-messaging CLIs' `send` commands.
 
 ## Commands
 
-### `claude-conv chats [--source S] [--limit N] [--json]`
+### `agent-conv chats [--source S] [--limit N] [--json]`
 
 List projects (channels) across every source, most recently active first:
 real cwd, which source, thread count, last-active timestamp, and an unread
 count when nonzero (see `unread`). The *same* real directory can appear as
 several rows — one per source that has history there.
 
-### `claude-conv read <query> [--source S] [--expand] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
+### `agent-conv read <query> [--source S] [--expand] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
 
 The channel's top-level view — never targets a single thread (use `thread`
 for that). Searches all three sources at once unless `--source` narrows it;
 an exact directory-name match merges every source's threads for it:
 
 ```bash
-bin/claude-conv read myproject                     # every thread's anchor, across all sources for that project
-bin/claude-conv read myproject --source cursor     # same, but only Cursor's threads
-bin/claude-conv read myproject --expand            # every thread's FULL content, one after another
-bin/claude-conv read myproject --expand --limit 5  # cap to the 5 most recent threads in expand mode
-bin/claude-conv read myproject --raw               # (with --expand) include thinking + tool_use/tool_result
+bin/agent-conv read myproject                     # every thread's anchor, across all sources for that project
+bin/agent-conv read myproject --source cursor     # same, but only Cursor's threads
+bin/agent-conv read myproject --expand            # every thread's FULL content, one after another
+bin/agent-conv read myproject --expand --limit 5  # cap to the 5 most recent threads in expand mode
+bin/agent-conv read myproject --raw               # (with --expand) include thinking + tool_use/tool_result
 ```
 
 Bare, `--limit` caps how many threads are *listed*; with `--expand`, `--limit`
@@ -130,7 +130,7 @@ mode — use `thread --limit` for that). Bare mode never marks anything read
 (no content was actually shown); `--expand` marks every thread it renders as
 read (see `unread`) unless `--no-mark-read` is passed.
 
-### `claude-conv thread <query> [--source S] [--session UUID | --nth N] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
+### `agent-conv thread <query> [--source S] [--session UUID | --nth N] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
 
 Read exactly one thread in full — Slack's `thread <channel> <ts>`, standing
 in a UUID or position (`--nth`) for the `ts` Slack would use. When a query
@@ -138,12 +138,12 @@ merges threads from multiple sources, `--nth` ranks across all of them by
 recency together:
 
 ```bash
-bin/claude-conv thread myproject                    # most recently active thread, any source, in full
-bin/claude-conv thread myproject --source codex     # most recent Codex thread specifically
-bin/claude-conv thread myproject --nth 2            # the thread before that
-bin/claude-conv thread myproject --session a1b2c3d4 # an exact thread (session UUID / composerId prefix)
-bin/claude-conv thread myproject --limit 20         # only its last 20 turns
-bin/claude-conv thread myproject --raw              # include thinking + tool_use/tool_result blocks
+bin/agent-conv thread myproject                    # most recently active thread, any source, in full
+bin/agent-conv thread myproject --source codex     # most recent Codex thread specifically
+bin/agent-conv thread myproject --nth 2            # the thread before that
+bin/agent-conv thread myproject --session a1b2c3d4 # an exact thread (session UUID / composerId prefix)
+bin/agent-conv thread myproject --limit 20         # only its last 20 turns
+bin/agent-conv thread myproject --raw              # include thinking + tool_use/tool_result blocks
 ```
 
 Compact mode (default) shows only genuine assistant prose and user text.
@@ -165,7 +165,7 @@ Subagent/sidechain forks (Claude Code only) are excluded unless
 everything, including thinking and full tool_use/tool_result detail. Marks
 the thread read (see `unread`) unless `--no-mark-read` is passed.
 
-### `claude-conv search <text> [--source S] [--project QUERY] [--limit N] [--json]`
+### `agent-conv search <text> [--source S] [--project QUERY] [--limit N] [--json]`
 
 Full-text search across every source's transcripts (or scoped with
 `--project`/`--source`). A cheap pre-filter runs before any full parsing — a
@@ -175,7 +175,7 @@ possible there) — so searching everywhere stays fast even with a lot of
 history. Matches anywhere in a transcript, one row per matching turn — for a
 title-only, one-row-per-thread search see `find`.
 
-### `claude-conv find <text> [--source S] [--limit N] [--json]`
+### `agent-conv find <text> [--source S] [--limit N] [--json]`
 
 Find a thread **by name** — i.e. by its derived title — across every project
 and source. Only Cursor stores a real thread title; Claude Code/Codex don't,
@@ -184,13 +184,13 @@ so "name" there is the first substantive thing you said in it (same text
 per matching turn), `find` matches only the title and returns one row per
 thread, most recently active first.
 
-### `claude-conv unread [--source S] [--project QUERY] [--limit N] [--mark-all-read] [--json]`
+### `agent-conv unread [--source S] [--project QUERY] [--limit N] [--mark-all-read] [--json]`
 
 List threads with activity you haven't seen yet, most recently active first,
 across every source. Claude Code and Codex have no concept of read/unread, so
 those two are tracked via local bookkeeping
-(`~/.config/claude-conv-cli/read-state.json`, override with
-`$CLAUDE_CONV_STATE_DIR`): a thread counts as unread until you view its full
+(`~/.config/agent-conv-cli/read-state.json`, override with
+`$AGENT_CONV_STATE_DIR`): a thread counts as unread until you view its full
 content via `thread` or `read --expand` (or catch up in bulk with
 `--mark-all-read`), same as a message you've never opened, and new activity
 since the last time makes it unread again. **Cursor already tracks its own
@@ -199,10 +199,10 @@ unread state natively** — that flag is read directly and never written to;
 its own flag).
 
 ```bash
-bin/claude-conv unread                        # everything unread, across every project and source
-bin/claude-conv unread --project myproject    # scoped to one project
-bin/claude-conv unread --source claude        # scoped to one backend
-bin/claude-conv unread --mark-all-read        # catch up in bulk instead of listing (claude/codex only)
+bin/agent-conv unread                        # everything unread, across every project and source
+bin/agent-conv unread --project myproject    # scoped to one project
+bin/agent-conv unread --source claude        # scoped to one backend
+bin/agent-conv unread --mark-all-read        # catch up in bulk instead of listing (claude/codex only)
 ```
 
 The first run will likely show your whole Claude Code/Codex history as
@@ -210,7 +210,7 @@ unread (nothing has ever been marked read yet) — run `unread --mark-all-read`
 once to start clean, then normal usage keeps it current. `chats` shows a
 per-project unread count and bare `read` prefixes unread rows with `●`.
 
-### `claude-conv fork <query> [--nth N] [--session UUID] [--match N] [--yes]`
+### `agent-conv fork <query> [--nth N] [--session UUID] [--match N] [--yes]`
 
 **Claude Code only** — Codex has an analogous `codex exec resume` but no fork
 flag, and Cursor has no CLI at all. Continue a past thread as a **new**
@@ -223,11 +223,11 @@ the current process and hands the terminal off to a real, writable
 interactive `claude` session — run it from an actual terminal, not scripted).
 
 ```bash
-bin/claude-conv fork myproject                     # dry-run: shows what would launch
-bin/claude-conv fork myproject --session a1b2c3d4 --yes  # actually fork that thread
+bin/agent-conv fork myproject                     # dry-run: shows what would launch
+bin/agent-conv fork myproject --session a1b2c3d4 --yes  # actually fork that thread
 ```
 
-### `claude-conv send <query> <message> [--nth N] [--session UUID] [--match N] [--fork] [--permission-mode MODE] [--timeout SECS] [--yes] [--json]`
+### `agent-conv send <query> <message> [--nth N] [--session UUID] [--match N] [--fork] [--permission-mode MODE] [--timeout SECS] [--yes] [--json]`
 
 **Claude Code only.** Send `<message>` into a thread non-interactively and
 print Claude's reply — runs `claude --print --resume <uuid> <message>` from
@@ -238,9 +238,9 @@ typed the message yourself; pass `--fork` to branch into a new thread instead
 reply captured immediately rather than opening a terminal).
 
 ```bash
-bin/claude-conv send myproject "what's the status of #123?"           # dry-run
-bin/claude-conv send myproject "what's the status of #123?" --yes     # actually sends, appends to that thread
-bin/claude-conv send myproject "try a different approach" --fork --yes  # sends into a NEW branch instead
+bin/agent-conv send myproject "what's the status of #123?"           # dry-run
+bin/agent-conv send myproject "what's the status of #123?" --yes     # actually sends, appends to that thread
+bin/agent-conv send myproject "try a different approach" --fork --yes  # sends into a NEW branch instead
 ```
 
 This is a real write action: the resumed thread may run tools (edit files,
@@ -253,7 +253,7 @@ it in. Verified live: forking a small thread with `--permission-mode plan`
 and a tool-free prompt returns a reply in a few seconds, and the original
 thread's turn count is untouched (only a `--fork`'d branch grows).
 
-### `claude-conv port <query> --into claude|codex [--source S] [--session UUID | --nth N] [--match N] [--limit N] [--raw] [--include-subagents] [--print] [--permission-mode MODE] [--timeout SECS] [--no-mark-read] [--yes]`
+### `agent-conv port <query> --into claude|codex [--source S] [--session UUID | --nth N] [--match N] [--limit N] [--raw] [--include-subagents] [--print] [--permission-mode MODE] [--timeout SECS] [--no-mark-read] [--yes]`
 
 Port a thread's content from **any** source into a **brand-new** conversation
 with another provider. This is *not* a true resume — each provider only
@@ -270,10 +270,10 @@ purely an editor launcher — open files, diff, goto-line; no chat/composer
 flags exist).
 
 ```bash
-bin/claude-conv port myproject --source cursor --into claude          # interactive: cursor thread -> new claude session
-bin/claude-conv port myproject --source codex --into claude --print   # headless: codex thread -> claude --print, capture reply
-bin/claude-conv port myproject --source claude --into codex           # claude thread -> new interactive codex session
-bin/claude-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
+bin/agent-conv port myproject --source cursor --into claude          # interactive: cursor thread -> new claude session
+bin/agent-conv port myproject --source codex --into claude --print   # headless: codex thread -> claude --print, capture reply
+bin/agent-conv port myproject --source claude --into codex           # claude thread -> new interactive codex session
+bin/agent-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
 ```
 
 Defaults to a dry-run (same convention as `fork`/`send`) that prints the

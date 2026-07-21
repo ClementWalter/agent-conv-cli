@@ -1,19 +1,19 @@
-# claude-conv-cli
+# agent-conv-cli
 
 Terminal access to your **own** Claude Code, Codex CLI, and Cursor
 conversation history — one reader across all three, read-only:
 
 ```bash
-claude-conv chats                        # projects (channels) across every source, most recent first
-claude-conv read "myproject"              # list every thread's anchor in that project, any source
-claude-conv thread "myproject"            # render the most recent thread in full
-claude-conv read "myproject" --expand     # render EVERY thread in that project in full
-claude-conv search "deploy-checklist"     # full-text search across everything
-claude-conv find "deploy-checklist"       # find a thread by name (its derived title)
-claude-conv fork "myproject" --yes        # continue a past Claude Code thread interactively, as a new one
-claude-conv send "myproject" "..." --yes  # send a message into a Claude Code thread headlessly, print the reply
-claude-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
-claude-conv unread                        # what's new since you last viewed it
+agent-conv chats                        # projects (channels) across every source, most recent first
+agent-conv read "myproject"              # list every thread's anchor in that project, any source
+agent-conv thread "myproject"            # render the most recent thread in full
+agent-conv read "myproject" --expand     # render EVERY thread in that project in full
+agent-conv search "deploy-checklist"     # full-text search across everything
+agent-conv find "deploy-checklist"       # find a thread by name (its derived title)
+agent-conv fork "myproject" --yes        # continue a past Claude Code thread interactively, as a new one
+agent-conv send "myproject" "..." --yes  # send a message into a Claude Code thread headlessly, print the reply
+agent-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
+agent-conv unread                        # what's new since you last viewed it
 ```
 
 Same shape as Slack, one level up: a **project** (the directory an agent ran
@@ -21,7 +21,7 @@ in) is a **channel**, and a **session IS a thread** — an anchor message (its
 first turn) plus every turn tied to it. The command set mirrors Slack's
 exactly:
 
-| Slack | claude-conv-cli |
+| Slack | agent-conv-cli |
 |---|---|
 | `channels` | `chats` |
 | `read <channel>` (flat) | bare `read <query>` (every thread's anchor) |
@@ -77,69 +77,69 @@ The `npx skills` install path additionally requires Node.js (for `npx`).
 ## Install
 
 **A — Bundled launcher.** No install step. Clone the repo and invoke
-`bin/claude-conv` directly; the `#!/usr/bin/env -S uv run --script` shebang and
+`bin/agent-conv` directly; the `#!/usr/bin/env -S uv run --script` shebang and
 [PEP 723](https://peps.python.org/pep-0723/) inline metadata make `uv` pull
 deps on the first run.
 
 ```bash
-git clone <repo> claude-conv-cli
-cd claude-conv-cli
-./bin/claude-conv chats
+git clone <repo> agent-conv-cli
+cd agent-conv-cli
+./bin/agent-conv chats
 ```
 
 **B — As an agent skill.** The repo ships a `SKILL.md` and the self-contained
-`bin/claude-conv` launcher at the project root, in the
+`bin/agent-conv` launcher at the project root, in the
 [Vercel Labs `skills`](https://github.com/vercel-labs/skills) format:
 
 ```bash
-npx skills add <owner>/claude-conv-cli
+npx skills add <owner>/agent-conv-cli
 ```
 
-This drops the skill under `~/.agents/skills/claude-conv-cli/` and symlinks it
+This drops the skill under `~/.agents/skills/agent-conv-cli/` and symlinks it
 into every supported agent runtime installed on your machine (Claude Code,
 Cursor, Windsurf, Codex, Gemini CLI, …). Agents then drive the CLI by invoking
-the bundled `bin/claude-conv` script directly.
+the bundled `bin/agent-conv` script directly.
 
 To install locally for development instead, symlink the checkout so the skill
 picks up live edits:
 
 ```bash
 mkdir -p ~/.claude/skills
-ln -s "$(pwd)" ~/.claude/skills/claude-conv-cli
+ln -s "$(pwd)" ~/.claude/skills/agent-conv-cli
 ```
 
 ## Usage
 
 ```bash
-claude-conv chats                                     # projects/channels across every source, most recent first
-claude-conv chats --source cursor --limit 100 --json  # everything from one backend, machine-readable
-claude-conv read myproject                            # every thread's anchor: title, turns, timestamp (all sources)
-claude-conv read myproject --source codex             # same, but only Codex's threads
-claude-conv read myproject --match 2                  # disambiguate when multiple (source, project) pairs match
-claude-conv read myproject --expand                   # every thread in that project, in full
-claude-conv read myproject --expand --limit 5         # cap to the 5 most recent threads, in full
-claude-conv thread myproject                          # ONE thread in full — most recently active by default, any source
-claude-conv thread myproject --nth 2                  # the thread before the most recent one
-claude-conv thread myproject --session a1b2c3d4       # an exact thread, by session-UUID/composerId prefix
-claude-conv thread myproject --limit 20               # only its last 20 turns
-claude-conv thread myproject --raw                    # include thinking + tool call/result blocks
-claude-conv search "deploy-checklist"                 # full-text search across every project and source
-claude-conv search "deploy-checklist" --project myproject  # scoped to one project
-claude-conv find "deploy-checklist"                   # find a thread by its derived title (name)
-claude-conv fork myproject                            # dry-run: shows the thread + command it'd launch (Claude Code only)
-claude-conv fork myproject --session a1b2c3d4 --yes   # actually fork that thread
-claude-conv send myproject "what's the status of #123?"          # dry-run (Claude Code only)
-claude-conv send myproject "what's the status of #123?" --yes    # appends to that same thread
-claude-conv send myproject "try another approach" --fork --yes   # sends into a NEW branch instead
-claude-conv unread                                    # everything unread, across every project and source
-claude-conv unread --project myproject                # scoped to one project
-claude-conv unread --mark-all-read                    # catch up in bulk (Claude Code/Codex only — Cursor tracks its own)
-claude-conv port myproject --source cursor --into claude          # cursor thread's content -> brand-new claude session
-claude-conv port myproject --source codex --into claude --print   # headless, capture the reply
-claude-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
+agent-conv chats                                     # projects/channels across every source, most recent first
+agent-conv chats --source cursor --limit 100 --json  # everything from one backend, machine-readable
+agent-conv read myproject                            # every thread's anchor: title, turns, timestamp (all sources)
+agent-conv read myproject --source codex             # same, but only Codex's threads
+agent-conv read myproject --match 2                  # disambiguate when multiple (source, project) pairs match
+agent-conv read myproject --expand                   # every thread in that project, in full
+agent-conv read myproject --expand --limit 5         # cap to the 5 most recent threads, in full
+agent-conv thread myproject                          # ONE thread in full — most recently active by default, any source
+agent-conv thread myproject --nth 2                  # the thread before the most recent one
+agent-conv thread myproject --session a1b2c3d4       # an exact thread, by session-UUID/composerId prefix
+agent-conv thread myproject --limit 20               # only its last 20 turns
+agent-conv thread myproject --raw                    # include thinking + tool call/result blocks
+agent-conv search "deploy-checklist"                 # full-text search across every project and source
+agent-conv search "deploy-checklist" --project myproject  # scoped to one project
+agent-conv find "deploy-checklist"                   # find a thread by its derived title (name)
+agent-conv fork myproject                            # dry-run: shows the thread + command it'd launch (Claude Code only)
+agent-conv fork myproject --session a1b2c3d4 --yes   # actually fork that thread
+agent-conv send myproject "what's the status of #123?"          # dry-run (Claude Code only)
+agent-conv send myproject "what's the status of #123?" --yes    # appends to that same thread
+agent-conv send myproject "try another approach" --fork --yes   # sends into a NEW branch instead
+agent-conv unread                                    # everything unread, across every project and source
+agent-conv unread --project myproject                # scoped to one project
+agent-conv unread --mark-all-read                    # catch up in bulk (Claude Code/Codex only — Cursor tracks its own)
+agent-conv port myproject --source cursor --into claude          # cursor thread's content -> brand-new claude session
+agent-conv port myproject --source codex --into claude --print   # headless, capture the reply
+agent-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
 ```
 
-`claude-conv --help` lists every subcommand; `claude-conv <cmd> --help` for
+`agent-conv --help` lists every subcommand; `agent-conv <cmd> --help` for
 per-command options including `--json`, `--limit`, `--match`, `--nth`,
 `--session`, `--source`, `--expand`, `--raw`, `--include-subagents`, `--fork`,
 `--into`, `--permission-mode`, `--yes`, `--no-mark-read`, `--mark-all-read`.
@@ -237,8 +237,8 @@ commands.
   way.
 - **Read/unread**: Claude Code and Codex have no concept of it, so both are
   tracked via local bookkeeping, not a feature of either tool. A small state
-  file (`~/.config/claude-conv-cli/read-state.json`, override with
-  `$CLAUDE_CONV_STATE_DIR`) maps each session id to the file mtime it was
+  file (`~/.config/agent-conv-cli/read-state.json`, override with
+  `$AGENT_CONV_STATE_DIR`) maps each session id to the file mtime it was
   last read at; `thread`/`read --expand` update it (unless `--no-mark-read`),
   and a thread counts as unread if it's never in that map or its current
   mtime is newer than the recorded one. Deliberately kept out of `~/.claude`
@@ -249,7 +249,7 @@ commands.
 
 ## Dependencies
 
-Declared inline via PEP 723 in `bin/claude-conv`:
+Declared inline via PEP 723 in `bin/agent-conv`:
 
 - `click` — CLI framework
 

@@ -91,7 +91,7 @@ import click
 logging.basicConfig(
     level=logging.WARNING, format="%(levelname)s: %(message)s", stream=sys.stderr
 )
-log = logging.getLogger("claude-conv")
+log = logging.getLogger("agent-conv")
 
 SOURCES = ("claude", "codex", "cursor")
 
@@ -116,7 +116,7 @@ CURSOR_WORKSPACE_STORAGE = CURSOR_USER_DIR / "workspaceStorage"
 # Codex have no concept of read/unread; Cursor does (its own composerHeaders
 # flag, read directly — never written to by this tool). This file only ever
 # tracks Claude Code and Codex threads.
-STATE_DIR = Path(os.environ.get("CLAUDE_CONV_STATE_DIR", str(Path.home() / ".config" / "claude-conv-cli")))
+STATE_DIR = Path(os.environ.get("AGENT_CONV_STATE_DIR", str(Path.home() / ".config" / "agent-conv-cli")))
 READ_STATE_FILE = STATE_DIR / "read-state.json"
 
 _SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
@@ -1352,8 +1352,8 @@ def unread(source_filter: str | None, project_query: str | None, limit: int, mar
     """List threads with activity you haven't seen yet, across every source.
 
     Claude Code and Codex have no concept of read/unread, so those two are
-    tracked via local bookkeeping (~/.config/claude-conv-cli/read-state.json,
-    override with $CLAUDE_CONV_STATE_DIR): a thread counts as unread until you
+    tracked via local bookkeeping (~/.config/agent-conv-cli/read-state.json,
+    override with $AGENT_CONV_STATE_DIR): a thread counts as unread until you
     view its full content via `thread` or `read --expand` (or catch up in
     bulk with --mark-all-read), same as a message you've never opened, and
     new activity since the last time makes it unread again. Cursor already
