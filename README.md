@@ -133,22 +133,30 @@ claude-conv send myproject "try another approach" --fork --yes   # sends into a 
 claude-conv unread                                    # everything unread, across every project and source
 claude-conv unread --project myproject                # scoped to one project
 claude-conv unread --mark-all-read                    # catch up in bulk (Claude Code/Codex only — Cursor tracks its own)
+claude-conv port myproject --source cursor --into claude          # cursor thread's content -> brand-new claude session
+claude-conv port myproject --source codex --into claude --print   # headless, capture the reply
+claude-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
 ```
 
 `claude-conv --help` lists every subcommand; `claude-conv <cmd> --help` for
 per-command options including `--json`, `--limit`, `--match`, `--nth`,
 `--session`, `--source`, `--expand`, `--raw`, `--include-subagents`, `--fork`,
-`--permission-mode`, `--yes`, `--no-mark-read`, `--mark-all-read`.
+`--into`, `--permission-mode`, `--yes`, `--no-mark-read`, `--mark-all-read`.
 
-Every read command supports `--json` for structured output. `fork` and `send`
-are the two that write, and both are **Claude Code only** (Codex has an
-analogous `codex exec resume` but no fork flag; Cursor has no CLI at all):
-`fork` hands off to a real interactive `claude --resume --fork-session`
-process (a brand-new session ID via Claude Code's own fork mechanism);
-`send` does the headless equivalent via `claude --print --resume`, and —
-unless `--fork` is passed — genuinely continues the *same* thread, appending
-the reply exactly as an interactive resume would. Both default to a dry-run,
-same convention as the personal-messaging CLIs' `send` commands.
+Every read command supports `--json` for structured output. `fork`, `send`,
+and `port` are the ones that write. `fork`/`send` are **Claude Code only**
+(Codex has an analogous `codex exec resume` but no fork flag; Cursor has no
+CLI at all): `fork` hands off to a real interactive `claude --resume
+--fork-session` process (a brand-new session ID via Claude Code's own fork
+mechanism); `send` does the headless equivalent via `claude --print
+--resume`, and — unless `--fork` is passed — genuinely continues the *same*
+thread, appending the reply exactly as an interactive resume would. `port`
+goes cross-provider instead: it starts a **brand-new** session with a
+*different* provider (`--into claude|codex`), seeded with the source
+thread's rendered transcript as the opening prompt — not a true resume,
+since no provider understands another's session format. All three default
+to a dry-run, same convention as the personal-messaging CLIs' `send`
+commands.
 
 ## How it works
 
@@ -216,6 +224,16 @@ same convention as the personal-messaging CLIs' `send` commands.
   plan` and a tool-free prompt returns a reply in a few seconds; the
   original thread's turn count is untouched and a `--fork`'d branch (with
   the reply appended) appears alongside it.
+- **`port` seeds a brand-new session with another provider** instead of
+  resuming — no provider can literally continue another's session format, so
+  the source thread's rendered transcript (same clean text `thread`/`read`
+  show, not a raw tool-call replay) becomes the opening prompt of a fresh
+  `claude`/`codex` process, started in the same directory. **Cursor can only
+  be a `--source`, never a `--into` target** — verified: `cursor --help` is
+  purely an editor launcher (open/diff/goto-line), with no chat/prompt
+  capability at all. Marks the source thread read (like `thread`) unless
+  `--no-mark-read` is passed, since its full content gets rendered either
+  way.
 - **Read/unread**: Claude Code and Codex have no concept of it, so both are
   tracked via local bookkeeping, not a feature of either tool. A small state
   file (`~/.config/claude-conv-cli/read-state.json`, override with

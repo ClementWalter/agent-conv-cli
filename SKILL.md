@@ -253,6 +253,41 @@ it in. Verified live: forking a small thread with `--permission-mode plan`
 and a tool-free prompt returns a reply in a few seconds, and the original
 thread's turn count is untouched (only a `--fork`'d branch grows).
 
+### `claude-conv port <query> --into claude|codex [--source S] [--session UUID | --nth N] [--match N] [--limit N] [--raw] [--include-subagents] [--print] [--permission-mode MODE] [--timeout SECS] [--no-mark-read] [--yes]`
+
+Port a thread's content from **any** source into a **brand-new** conversation
+with another provider. This is *not* a true resume — each provider only
+understands its own session format, so a Codex or Cursor thread can never
+literally continue inside Claude Code (or vice versa) — instead, the source
+thread's rendered transcript (the same clean text `thread`/`read` show, no
+raw tool-call replay) becomes the *opening prompt* of a fresh session with
+the target provider, started in the same directory, so the model has full
+context to pick up from a similar point without an exact state replay.
+
+**Cursor can only ever be a source, never a `--into` target** — it has no CLI
+at all to start or seed a chat with a prompt (verified: `cursor --help` is
+purely an editor launcher — open files, diff, goto-line; no chat/composer
+flags exist).
+
+```bash
+bin/claude-conv port myproject --source cursor --into claude          # interactive: cursor thread -> new claude session
+bin/claude-conv port myproject --source codex --into claude --print   # headless: codex thread -> claude --print, capture reply
+bin/claude-conv port myproject --source claude --into codex           # claude thread -> new interactive codex session
+bin/claude-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
+```
+
+Defaults to a dry-run (same convention as `fork`/`send`) that prints the
+resolved source thread and what would be launched, without dumping the full
+seed transcript into the terminal. Without `--print`, hands the terminal off
+to a real interactive session (`claude "<seed>"` or `codex "<seed>"`, both of
+which accept an initial prompt to start fresh); with `--print`, headless via
+`claude --print "<seed>"` / `codex exec "<seed>"`, capturing and printing
+just the reply. Since the source thread's full content gets rendered either
+way, marks it read (see `unread`) unless `--no-mark-read` is passed. Verified
+live: a real 2-turn Cursor thread ("Forge script profile") ported headlessly
+into a fresh `claude --print` session picked up the topic correctly and
+investigated the actual repo, with no interference to the source thread.
+
 ## Notes
 
 - **The directory name is not the source of truth for the project path**

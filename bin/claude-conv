@@ -53,15 +53,21 @@ across all three sources at once:
   scopes any of these to one backend. `fork`/`send` hand off to a real
   `claude --resume [--fork-session]` process to continue a past Claude Code
   thread live or headlessly — Claude-only for now (Codex has an analogous
-  `codex exec resume`, but no fork; Cursor has no CLI at all).
+  `codex exec resume`, but no fork; Cursor has no CLI at all). `port` goes
+  cross-provider: it seeds a **brand-new** session with a different provider
+  (`--into claude|codex`) using the source thread's rendered transcript as
+  the opening prompt, since no provider can literally resume another's
+  session format — Cursor can only ever be a `--source` for this, never a
+  target, as it has no CLI to seed a chat with a prompt at all.
 
 Reading is entirely local and read-only — each tool owns its own files and
-nothing here mutates them (Cursor's `state.vscdb` is read via a snapshot copy,
-the same pattern imessage-cli uses for `chat.db`, so a live Cursor instance
-writing to it is never disturbed). `fork` and `send` are the two commands
-that act: they shell out to the `claude` binary itself (a real write/launch
-action), and both default to a dry-run like the personal-messaging CLIs'
-`send` commands do.
+nothing here mutates them (Cursor's `state.vscdb` is opened via a read-only
+`mode=ro` URI connection rather than a snapshot copy, since the live database
+is 1GB+; SQLite's own WAL-reader consistency guarantees mean a live Cursor
+instance writing to it is never disturbed). `fork`, `send`, and `port` are
+the commands that act: they shell out to the `claude`/`codex` binaries
+themselves (a real write/launch action), and all three default to a dry-run
+like the personal-messaging CLIs' `send` commands do.
 """
 
 from __future__ import annotations
@@ -1105,7 +1111,7 @@ def _print_handle_list(cwd_label: str, handles: list[SessionHandle], as_json: bo
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """Read your local Claude Code conversation history (read-only)."""
+    """Read your local Claude Code / Codex CLI / Cursor conversation history (read-only)."""
 
 
 _SOURCE_OPTION = click.option(
@@ -1541,6 +1547,139 @@ def send(
             result.stderr.strip() or f"claude exited with status {result.returncode}"
         )
     click.echo(result.stdout if as_json else result.stdout.strip())
+
+
+def _port_seed_text(handle: SessionHandle, raw: bool, include_subagents: bool, limit: int) -> str:
+    turns = _handle_rendered_turns(handle, raw, include_subagents, limit)
+    title = _handle_title(handle)
+    lines = [
+        f"Continuing a conversation ported from {handle.source} "
+        f"(project: {handle.project_cwd}, thread: {title}):",
+        "",
+        "---",
+    ]
+    for t in turns:
+        lines.append(f"{t['role']}: {t['text']}")
+        lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("Please pick up from here.")
+    return "\n".join(lines)
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--into", "target", type=click.Choice(("claude", "codex")), required=True, help="Which provider to start the new conversation in.")
+@_SOURCE_OPTION
+@click.option("--session", "session_uuid", help="Port exactly this thread (session UUID or prefix).")
+@click.option("--nth", default=1, help="Which thread to port, 1 = most recent (default).")
+@click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
+@click.option("--limit", default=0, help="Only port the last N turns (0 = all).")
+@click.option("--raw", is_flag=True, help="Include thinking blocks and tool calls/results in the ported transcript.")
+@click.option("--include-subagents", is_flag=True, help="Include forked subagent turns (claude source only).")
+@click.option("--print", "headless", is_flag=True, help="Send headlessly and print the reply, instead of opening an interactive session.")
+@click.option("--permission-mode", help="Passed through to claude in --print mode (plan / acceptEdits / bypassPermissions / dontAsk).")
+@click.option("--timeout", default=300, help="Seconds to wait for a reply in --print mode.")
+@click.option("--no-mark-read", is_flag=True, help="Don't mark the source thread as read.")
+@click.option("--yes", is_flag=True, help="Actually launch/send. Without it, prints what would run as a dry-run.")
+def port(
+    query: str,
+    target: str,
+    source_filter: str | None,
+    session_uuid: str | None,
+    nth: int,
+    match: int,
+    limit: int,
+    raw: bool,
+    include_subagents: bool,
+    headless: bool,
+    permission_mode: str | None,
+    timeout: int,
+    no_mark_read: bool,
+    yes: bool,
+) -> None:
+    """Port a thread's content from any source into a BRAND-NEW conversation
+    with another provider (--into claude|codex).
+
+    This is not a true resume — each provider only understands its own
+    session format, so a Codex or Cursor thread can never literally continue
+    inside Claude Code (or vice versa). Instead, the source thread's rendered
+    transcript (the same clean text `thread`/`read` show — no raw tool-call
+    replay) becomes the *opening prompt* of a fresh session with the target
+    provider, started in the same directory, so the model has full context
+    to pick up from a similar point without an exact state replay.
+
+    Cursor can only ever be a source here, never a --into target: it has no
+    CLI at all to start or seed a chat with a prompt (verified — `cursor
+    --help` is purely an editor launcher: open files, diff, goto-line; no
+    chat/composer flags exist).
+
+    Defaults to a dry-run that prints the resolved source thread and what
+    would be launched. Pass --yes to actually do it. Without --print, this
+    replaces the current process and hands the terminal off to a real,
+    writable interactive session (run it from an actual terminal, not
+    scripted) — with --print, it's headless via `claude --print`/`codex exec`,
+    capturing and printing just the reply. Since the source thread's full
+    content gets rendered either way, marks it read (see `unread`) unless
+    --no-mark-read is passed.
+    """
+    sources = (source_filter,) if source_filter else SOURCES
+    projects = _resolve_projects(query, match, sources)
+    sessions = _all_sessions_for(projects)
+    handle = _pick_session_handle(sessions, session_uuid, nth)
+    seed = _port_seed_text(handle, raw, include_subagents, limit)
+    cwd = handle.project_cwd
+    title = _handle_title(handle)
+
+    if target == "claude":
+        cmd = ["claude"]
+        if headless:
+            cmd.append("--print")
+            if permission_mode:
+                cmd += ["--permission-mode", permission_mode]
+        cmd.append(seed)
+    else:
+        cmd = ["codex", "exec", seed] if headless else ["codex", seed]
+
+    if not yes:
+        click.echo("DRY-RUN (nothing launched). Re-run with --yes to port.")
+        click.echo(f"  from:    [{handle.source}] {handle.uuid}  ({title})")
+        click.echo(f"  into:    {target} ({'headless' if headless else 'interactive'})")
+        click.echo(f"  cwd:     {cwd}")
+        first_line = seed.splitlines()[0] if seed else ""
+        click.echo(f"  seed:    {len(seed)} chars, {len(seed.splitlines())} lines — {first_line}")
+        cmd_display = cmd[:-1] + [f"<seed: {len(seed)} chars>"]
+        click.echo(f"  command: {' '.join(shlex.quote(c) for c in cmd_display)}")
+        return
+
+    if not Path(cwd).is_dir():
+        raise click.ClickException(f"{cwd!r} no longer exists on disk.")
+
+    if not no_mark_read:
+        state = _load_read_state()
+        _handle_mark_read(handle, state)
+        _save_read_state(state)
+
+    if headless:
+        try:
+            result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise click.ClickException(f"No reply within {timeout}s (--timeout to extend).")
+        except FileNotFoundError:
+            raise click.ClickException(f"`{cmd[0]}` not found on PATH.")
+        if result.returncode != 0:
+            raise click.ClickException(
+                result.stderr.strip() or f"{cmd[0]} exited with status {result.returncode}"
+            )
+        click.echo(result.stdout.strip())
+        return
+
+    click.echo(f"Porting [{handle.source}] {handle.uuid} into {target} at {cwd} ...", err=True)
+    os.chdir(cwd)
+    try:
+        os.execvp(cmd[0], cmd)
+    except FileNotFoundError:
+        raise click.ClickException(f"`{cmd[0]}` not found on PATH.")
 
 
 if __name__ == "__main__":
