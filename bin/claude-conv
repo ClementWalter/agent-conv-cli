@@ -417,13 +417,11 @@ def _resolve_one_project(query: str, match: int) -> Path:
     return candidates[match - 1 if match else 0]
 
 
-def _resolve_one_session(
-    query: str, match: int, nth: int, session_uuid: str | None
+def _pick_session_from_files(
+    files: list[Path], session_uuid: str | None, nth: int
 ) -> Path:
-    """Shared by `read`/`fork`/`send`: project QUERY + --match, then --session
-    (exact UUID/prefix) or --nth (1 = most recent, the default)."""
-    project = _resolve_one_project(query, match)
-    files = _session_files(project)
+    """--session (exact UUID/prefix) or --nth (1 = most recent) within an
+    already-resolved project's session files."""
     if session_uuid:
         matches = [f for f in files if f.stem.startswith(session_uuid)]
         if not matches:
@@ -432,6 +430,48 @@ def _resolve_one_session(
     if nth < 1 or nth > len(files):
         raise click.ClickException(f"--nth {nth} out of range (1..{len(files)}).")
     return files[nth - 1]
+
+
+def _resolve_one_session(
+    query: str, match: int, nth: int, session_uuid: str | None
+) -> Path:
+    """Shared by `fork`/`send`: project QUERY + --match, then --session (exact
+    UUID/prefix) or --nth (1 = most recent, the default)."""
+    project = _resolve_one_project(query, match)
+    return _pick_session_from_files(_session_files(project), session_uuid, nth)
+
+
+def _print_session_list(project: Path, files: list[Path], as_json: bool) -> None:
+    """The "top-level" view of a project: one line per session (its anchor),
+    no content — shared by `sessions` and bare `read` (no --session/--nth)."""
+    state = _load_read_state()
+    out = [_session_summary(f, read_state=state) for f in files]
+    if as_json:
+        click.echo(json.dumps(out, ensure_ascii=False))
+        return
+    cwd = out[0]["cwd"] if out else project.name
+    click.echo(f"# {cwd} — {len(out)} session(s), most recently active first\n")
+    for s in out:
+        last = s["end"] or s["start"]
+        mark = "● " if s["unread"] else "  "
+        click.echo(f"{mark}{_local_ts(last)}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
+
+
+def _rendered_session_turns(path: Path, raw: bool, include_subagents: bool, limit: int) -> list[dict]:
+    """A session's turns, cleaned and rendered — shared by `read`'s
+    single-session mode and its --expand (all-sessions) mode."""
+    turns = list(_iter_turns(path, include_subagents=include_subagents))
+    if not raw:
+        turns = _drop_tool_injected_followups(turns)
+    if limit:
+        turns = turns[-limit:]
+    out = []
+    for t in turns:
+        rendered = _render_turn(t, raw=raw)
+        if rendered is None:
+            continue
+        out.append({"ts": t.ts, "role": t.role, "text": rendered})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -469,77 +509,91 @@ def chats(limit: int, as_json: bool) -> None:
 @click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def sessions(query: str, limit: int, match: int, as_json: bool) -> None:
-    """List sessions within the project matching QUERY, most recent first."""
+    """List sessions within the project matching QUERY, most recent first.
+
+    Equivalent to bare `read QUERY` (no --session/--nth/--expand) — kept as
+    its own command because "list the sessions" and "read the top-level
+    view of this project" are the same operation.
+    """
     project = _resolve_one_project(query, match)
-    state = _load_read_state()
-    files = _session_files(project)[:limit]
-    out = [_session_summary(f, read_state=state) for f in files]
-    if as_json:
-        click.echo(json.dumps(out, ensure_ascii=False))
-        return
-    cwd = out[0]["cwd"] if out else project.name
-    click.echo(f"# {cwd} — {len(out)} session(s), most recently active first\n")
-    for s in out:
-        last = s["end"] or s["start"]
-        mark = "● " if s["unread"] else "  "
-        click.echo(f"{mark}{_local_ts(last)}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
+    _print_session_list(project, _session_files(project)[:limit], as_json)
 
 
 @cli.command()
 @click.argument("query")
-@click.option("--session", "session_uuid", help="Exact session UUID (or prefix) instead of the Nth most recent.")
-@click.option("--nth", default=1, help="Which session to read, 1 = most recent (default).")
+@click.option("--session", "session_uuid", help="Read exactly this session in full (UUID or prefix).")
+@click.option("--nth", type=int, default=None, help="Read the Nth session in full, 1 = most recent. Passing this (or --session) switches into single-session mode.")
 @click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
-@click.option("--limit", default=0, help="Only show the last N turns (0 = all).")
+@click.option("--expand", is_flag=True, help="In list mode (no --session/--nth), show every session's full content instead of just its anchor.")
+@click.option("--limit", default=0, help="Cap: turns shown in single-session mode, sessions shown in list/--expand mode (0 = no cap).")
 @click.option("--raw", is_flag=True, help="Include thinking blocks and tool calls/results.")
 @click.option("--include-subagents", is_flag=True, help="Include forked subagent turns.")
-@click.option("--no-mark-read", is_flag=True, help="Don't mark this session as read.")
+@click.option("--no-mark-read", is_flag=True, help="Don't mark read session(s) as read.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def read(
     query: str,
     session_uuid: str | None,
-    nth: int,
+    nth: int | None,
     match: int,
+    expand: bool,
     limit: int,
     raw: bool,
     include_subagents: bool,
     no_mark_read: bool,
     as_json: bool,
 ) -> None:
-    """Render a session's transcript from the project matching QUERY.
+    """Read the project matching QUERY — same shape as a Slack channel read.
 
-    Defaults to that project's most recently active session; pick another with
-    --nth (1 = most recent, 2 = the one before, ...) or target an exact
-    --session UUID. Marks the session read (see `unread`) unless
-    --no-mark-read is passed.
+    Bare (no --session/--nth): lists every session's anchor (title, turn
+    count, timestamp) — the project's top-level view, identical to
+    `sessions QUERY`. Add --expand to inline every session's full content
+    instead, like Slack's `--expand-thread`. Pass --session or --nth to read
+    exactly one session in full — the equivalent of Slack's `thread`, reading
+    one specific anchor + everything tied to it. Marks whatever full content
+    gets shown as read (see `unread`) unless --no-mark-read is passed.
     """
-    path = _resolve_one_session(query, match, nth, session_uuid)
+    project = _resolve_one_project(query, match)
+    files = _session_files(project)
 
-    turns = list(_iter_turns(path, include_subagents=include_subagents))
-    if not raw:
-        turns = _drop_tool_injected_followups(turns)
-    if limit:
-        turns = turns[-limit:]
+    if session_uuid is not None or nth is not None:
+        path = _pick_session_from_files(files, session_uuid, nth or 1)
+        out = _rendered_session_turns(path, raw, include_subagents, limit)
+        if not no_mark_read:
+            state = _load_read_state()
+            _mark_read(path, state)
+            _save_read_state(state)
+        if as_json:
+            click.echo(json.dumps(out, ensure_ascii=False))
+            return
+        cwd = _session_cwd(path) or path.parent.name
+        click.echo(f"# {cwd} — session {path.stem} — {len(out)} turns\n")
+        for m in out:
+            click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
+        return
 
-    out = []
-    for t in turns:
-        rendered = _render_turn(t, raw=raw)
-        if rendered is None:
-            continue
-        out.append({"ts": t.ts, "role": t.role, "text": rendered})
+    session_files = files[:limit] if limit else files
 
+    if not expand:
+        _print_session_list(project, session_files, as_json)
+        return
+
+    state = _load_read_state()
+    sessions_out = []
+    for f in session_files:
+        turns = _rendered_session_turns(f, raw, include_subagents, limit=0)
+        if not no_mark_read:
+            _mark_read(f, state)
+        sessions_out.append({"session": f.stem, "cwd": _session_cwd(f) or project.name, "turns": turns})
     if not no_mark_read:
-        state = _load_read_state()
-        _mark_read(path, state)
         _save_read_state(state)
 
     if as_json:
-        click.echo(json.dumps(out, ensure_ascii=False))
+        click.echo(json.dumps(sessions_out, ensure_ascii=False))
         return
-    cwd = _session_cwd(path) or path.parent.name
-    click.echo(f"# {cwd} — session {path.stem} — {len(out)} turns\n")
-    for m in out:
-        click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
+    for s in sessions_out:
+        click.echo(f"## session {s['session']} — {len(s['turns'])} turns\n")
+        for m in s["turns"]:
+            click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
 
 
 @cli.command()

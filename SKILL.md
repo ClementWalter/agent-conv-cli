@@ -5,10 +5,13 @@ description:
   the bundled `bin/claude-conv` command. Claude Code writes every session to
   `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`; this CLI reads those files
   directly (read-only). `claude-conv chats` lists projects you've worked in,
-  most recently active first, `claude-conv sessions <query>` lists individual
-  sessions within a matched project, `claude-conv read <query>` renders a
-  session as a dialogue (defaults to the most recent), `claude-conv search
-  <text>` full-text-searches across everything, `claude-conv find <text>`
+  most recently active first, `claude-conv sessions <query>` (= bare
+  `claude-conv read <query>`) lists individual sessions within a matched
+  project (their anchors — title/turns/timestamp, no content), `claude-conv
+  read <query> --session UUID` (or `--nth N`) renders one session in full as a
+  dialogue, `claude-conv read <query> --expand` renders every session in the
+  project in full, `claude-conv search <text>` full-text-searches across
+  everything, `claude-conv find <text>`
   locates a session by its derived title (name) across every project,
   `claude-conv fork <query>` hands off to `claude --resume --fork-session` to
   continue a past session as a new one interactively (dry-run by default),
@@ -38,10 +41,17 @@ directory; from elsewhere use the absolute path.
 
 ## Mental model
 
-There's no "chat partner" here — a **project** (the directory you ran `claude`
-in) is the closest analog to a chat, and a **session** is one sitting within
-it. `chats` lists projects; `sessions <query>` lists the sessions within one;
-`read <query>` renders a session's transcript, defaulting to the most recent.
+Same shape as Slack, one level up: a **project** (the directory you ran
+`claude` in) is a channel, and a **session** is a thread — an anchor message
+(the session's first turn) plus everything tied to it. `chats` lists
+projects/channels. `read <query>` mirrors Slack's `read <channel>`: bare, it
+prints the channel's top-level view (every session's anchor, no content —
+identical to `sessions <query>`); `--expand` inlines every session's full
+content, like Slack's `--expand-thread`; `--session`/`--nth` reads one
+specific session in full, like Slack's `thread <channel> <ts>`. Unlike Slack,
+there's no "loose message outside any thread" case — every turn belongs to
+exactly one session, so there's nothing else for a project-level read to show
+besides its sessions.
 
 ## When to use
 
@@ -69,20 +79,28 @@ cwd or the encoded directory name), most recently active first: short UUID,
 turn count, a derived title (the first substantive thing the user said —
 Claude Code doesn't store a title), and an `●` marker on unread ones.
 Ambiguous project matches print a numbered list — pick with `--match N`.
+Exactly what bare `read <query>` (no `--session`/`--nth`) shows too — kept as
+its own command because "list the sessions" reads more naturally on its own.
 
-### `claude-conv read <query> [--nth N] [--session UUID] [--limit N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
+### `claude-conv read <query> [--session UUID | --nth N] [--expand] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
 
-Render a session's transcript from the project matching `<query>`. Marks the
-session read (see `unread`) unless `--no-mark-read` is passed.
+Three modes, same as Slack's `read`/`--expand-thread`/`thread`:
 
 ```bash
-bin/claude-conv read zama                    # most recently active session in a "zama" project
-bin/claude-conv read zama --match 2          # disambiguate when multiple projects match
-bin/claude-conv read zama --nth 2            # the session before the most recent one
-bin/claude-conv read zama --session 573496f4 # an exact session (UUID prefix)
-bin/claude-conv read zama --limit 20         # only the last 20 turns
-bin/claude-conv read zama --raw              # include thinking + tool_use/tool_result blocks
+bin/claude-conv read zama                     # list mode: every session's anchor (= `sessions zama`)
+bin/claude-conv read zama --expand            # every session's FULL content, one after another
+bin/claude-conv read zama --expand --limit 5  # cap to the 5 most recent sessions in expand mode
+bin/claude-conv read zama --nth 1             # ONE session in full — 1 = most recent
+bin/claude-conv read zama --session 573496f4  # ONE exact session in full (UUID prefix)
+bin/claude-conv read zama --session 573496f4 --limit 20  # only its last 20 turns
+bin/claude-conv read zama --raw               # (any mode) include thinking + tool_use/tool_result
 ```
+
+Passing `--session` or `--nth` (even `--nth 1`) switches to single-session
+mode — `--limit` then caps *turns*; in list/`--expand` mode `--limit` caps
+*sessions* instead. Marks whatever full content gets shown as read (see
+`unread`) unless `--no-mark-read` is passed; list mode alone (no `--expand`)
+doesn't mark anything read, since you haven't actually seen any content yet.
 
 Compact mode (default) shows only genuine assistant prose and user text.
 Stripped entirely: `<system-reminder>` and `<task-notification>` blocks,

@@ -5,8 +5,9 @@ the local session transcripts read-only:
 
 ```bash
 claude-conv chats                   # projects you've worked in, most recent first
-claude-conv sessions "zama"         # sessions within a matched project
-claude-conv read "zama"             # render the most recent session as a dialogue
+claude-conv read "zama"             # list every session's anchor in that project
+claude-conv read "zama" --nth 1     # render the most recent session in full
+claude-conv read "zama" --expand    # render EVERY session in that project in full
 claude-conv search "vault-update"   # full-text search across everything
 claude-conv find "vault-update"     # find a session by name (its derived title)
 claude-conv fork "zama" --yes       # continue a past session interactively, as a new one
@@ -16,9 +17,15 @@ claude-conv unread                  # what's new since you last `read` it
 
 Claude Code writes every session to
 `~/.claude/projects/<cwd-encoded>/<session-uuid>.jsonl` — one JSON-lines file
-per session, in (roughly) the Anthropic Messages API shape. There's no
-"chat partner" here: a **project** (the directory you ran `claude` in) is the
-closest analog to a chat, and a **session** is one sitting within it.
+per session, in (roughly) the Anthropic Messages API shape. Same shape as
+Slack, one level up: a **project** (the directory you ran `claude` in) is a
+channel, and a **session** is a thread — an anchor message (its first turn)
+plus everything tied to it. `read` mirrors Slack's `read`/`--expand-thread`/
+`thread` exactly: bare, it's the channel's top-level view (every session's
+anchor, no content); `--expand` inlines every session's full content;
+`--session`/`--nth` reads one specific session in full. Unlike Slack there's
+no "loose message outside any thread" — every turn belongs to some session,
+so a project has nothing to show beyond its sessions.
 
 ## Prerequisites
 
@@ -73,13 +80,16 @@ ln -s "$(pwd)" ~/.claude/skills/claude-conv-cli
 ```bash
 claude-conv chats                        # projects, most recently active first
 claude-conv chats --limit 100 --json     # everything, machine-readable
-claude-conv sessions zama                # sessions within the "zama" project
+claude-conv sessions zama                # list every session's anchor (= bare `read zama`)
 claude-conv sessions zama --match 2      # disambiguate when multiple projects match
-claude-conv read zama                    # render the most recent session
+claude-conv read zama                    # same list, via `read`'s default (list) mode
+claude-conv read zama --expand           # every session in that project, in full
+claude-conv read zama --expand --limit 5 # cap to the 5 most recent sessions, in full
+claude-conv read zama --nth 1            # ONE session in full — 1 = most recent
 claude-conv read zama --nth 2            # the session before the most recent one
-claude-conv read zama --session 573496f4 # an exact session, by UUID prefix
-claude-conv read zama --limit 20         # only the last 20 turns
-claude-conv read zama --raw              # include thinking + tool call/result blocks
+claude-conv read zama --session 573496f4 # an exact session, by UUID prefix, in full
+claude-conv read zama --session 573496f4 --limit 20  # only its last 20 turns
+claude-conv read zama --raw              # (any mode) include thinking + tool call/result blocks
 claude-conv search "vault-update"        # full-text search across every project
 claude-conv search "vault-update" --project zama  # scoped to one project
 claude-conv find "vault-update"          # find a session by its derived title (name)
@@ -95,8 +105,8 @@ claude-conv unread --mark-all-read       # catch up in bulk instead of listing
 
 `claude-conv --help` lists every subcommand; `claude-conv <cmd> --help` for
 per-command options including `--json`, `--limit`, `--match`, `--nth`,
-`--session`, `--raw`, `--include-subagents`, `--fork`, `--permission-mode`,
-`--yes`, `--no-mark-read`, `--mark-all-read`.
+`--session`, `--expand`, `--raw`, `--include-subagents`, `--fork`,
+`--permission-mode`, `--yes`, `--no-mark-read`, `--mark-all-read`.
 
 Every read command supports `--json` for structured output. `fork` and `send`
 are the two that write: `fork` hands off to a real interactive `claude
@@ -109,6 +119,14 @@ commands.
 
 ## How it works
 
+- **`read` has three modes, mirroring Slack's `read`/`--expand-thread`/
+  `thread` exactly.** Passing `--session` or `--nth` (even `--nth 1`)
+  switches into single-session mode — read one specific session in full,
+  `--limit` capping turns. Without either: list mode by default (every
+  session's anchor, no content — identical to `sessions`), or `--expand`
+  mode (every session's full content, `--limit` now capping *sessions*
+  instead of turns). List mode alone never marks anything read, since no
+  content was actually shown; single-session and `--expand` mode do.
 - **Project resolution doesn't trust the directory name.** Claude Code encodes
   a project's cwd by turning every `/` and `.` into `-`, which is lossy on its
   own — a literal dash in a folder name is indistinguishable from an encoded
