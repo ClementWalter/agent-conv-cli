@@ -33,9 +33,10 @@ Two things drive the design:
   continue a past session as a new one.
 
 Reading is entirely local and read-only — Claude Code owns these files and
-nothing here mutates them. `fork` is the one command that acts: it shells out
-to the `claude` binary itself (a real write/launch action), and defaults to a
-dry-run like the personal-messaging CLIs' `send` commands do.
+nothing here mutates them. `fork` and `send` are the two commands that act:
+they shell out to the `claude` binary itself (a real write/launch action),
+and both default to a dry-run like the personal-messaging CLIs' `send`
+commands do.
 """
 
 from __future__ import annotations
@@ -44,6 +45,8 @@ import json
 import logging
 import os
 import re
+import shlex
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -335,6 +338,23 @@ def _resolve_one_project(query: str, match: int) -> Path:
     return candidates[match - 1 if match else 0]
 
 
+def _resolve_one_session(
+    query: str, match: int, nth: int, session_uuid: str | None
+) -> Path:
+    """Shared by `read`/`fork`/`send`: project QUERY + --match, then --session
+    (exact UUID/prefix) or --nth (1 = most recent, the default)."""
+    project = _resolve_one_project(query, match)
+    files = _session_files(project)
+    if session_uuid:
+        matches = [f for f in files if f.stem.startswith(session_uuid)]
+        if not matches:
+            raise click.ClickException(f"No session {session_uuid!r} in this project.")
+        return matches[0]
+    if nth < 1 or nth > len(files):
+        raise click.ClickException(f"--nth {nth} out of range (1..{len(files)}).")
+    return files[nth - 1]
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -407,17 +427,7 @@ def read(
     --nth (1 = most recent, 2 = the one before, ...) or target an exact
     --session UUID.
     """
-    project = _resolve_one_project(query, match)
-    files = _session_files(project)
-    if session_uuid:
-        matches = [f for f in files if f.stem.startswith(session_uuid)]
-        if not matches:
-            raise click.ClickException(f"No session {session_uuid!r} in this project.")
-        path = matches[0]
-    else:
-        if nth < 1 or nth > len(files):
-            raise click.ClickException(f"--nth {nth} out of range (1..{len(files)}).")
-        path = files[nth - 1]
+    path = _resolve_one_session(query, match, nth, session_uuid)
 
     turns = list(_iter_turns(path, include_subagents=include_subagents))
     if limit:
@@ -433,7 +443,7 @@ def read(
     if as_json:
         click.echo(json.dumps(out, ensure_ascii=False))
         return
-    cwd = _session_cwd(path) or project.name
+    cwd = _session_cwd(path) or path.parent.name
     click.echo(f"# {cwd} — session {path.stem} — {len(out)} turns\n")
     for m in out:
         click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
@@ -554,19 +564,8 @@ def fork(query: str, nth: int, session_uuid: str | None, match: int, yes: bool) 
     Defaults to a dry-run that prints what would be launched. Pass --yes to
     actually do it.
     """
-    project = _resolve_one_project(query, match)
-    files = _session_files(project)
-    if session_uuid:
-        matches = [f for f in files if f.stem.startswith(session_uuid)]
-        if not matches:
-            raise click.ClickException(f"No session {session_uuid!r} in this project.")
-        path = matches[0]
-    else:
-        if nth < 1 or nth > len(files):
-            raise click.ClickException(f"--nth {nth} out of range (1..{len(files)}).")
-        path = files[nth - 1]
-
-    cwd = _session_cwd(path) or str(project)
+    path = _resolve_one_session(query, match, nth, session_uuid)
+    cwd = _session_cwd(path) or str(path.parent)
     title = _session_title(path)
 
     if not yes:
@@ -584,6 +583,82 @@ def fork(query: str, nth: int, session_uuid: str | None, match: int, yes: bool) 
         os.execvp("claude", ["claude", "--resume", path.stem, "--fork-session"])
     except FileNotFoundError:
         raise click.ClickException("`claude` not found on PATH.")
+
+
+@cli.command()
+@click.argument("query")
+@click.argument("message")
+@click.option("--nth", default=1, help="Which session to continue, 1 = most recent (default).")
+@click.option("--session", "session_uuid", help="Exact session UUID (or prefix) instead of the Nth most recent.")
+@click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
+@click.option("--fork", "fork_session", is_flag=True, help="Continue as a NEW session instead of appending to the original (like `fork`).")
+@click.option("--permission-mode", help="Passed through to claude, e.g. plan / acceptEdits / bypassPermissions / dontAsk.")
+@click.option("--timeout", default=300, help="Seconds to wait for a reply before giving up.")
+@click.option("--yes", is_flag=True, help="Actually send. Without it, prints the resolved command as a dry-run.")
+@click.option("--json", "as_json", is_flag=True, help="Emit Claude's --output-format json reply as-is.")
+def send(
+    query: str,
+    message: str,
+    nth: int,
+    session_uuid: str | None,
+    match: int,
+    fork_session: bool,
+    permission_mode: str | None,
+    timeout: int,
+    yes: bool,
+    as_json: bool,
+) -> None:
+    """Send MESSAGE into a session non-interactively and print Claude's reply.
+
+    Runs `claude --print --resume <uuid> MESSAGE` from the session's own
+    directory — the headless equivalent of resuming it in an interactive
+    terminal and typing MESSAGE, without needing a TTY. Without --fork, this
+    *is* resuming that exact session: the reply gets appended to the same
+    session file, exactly as if you'd typed it interactively. Pass --fork to
+    branch into a new session instead (like `fork`, but with the message sent
+    and the reply captured immediately rather than opening a terminal).
+
+    This is a real write action — the resumed session may run tools (edit
+    files, run commands, ...) depending on its permission mode, which is why
+    it defaults to a dry-run. Pass --yes to actually run it. `--permission-mode`
+    is passed straight through to `claude`; without it, whatever your global/
+    project default is applies, which may prompt or block on anything needing
+    approval since there is no interactive terminal to approve it in.
+    """
+    path = _resolve_one_session(query, match, nth, session_uuid)
+    cwd = _session_cwd(path) or str(path.parent)
+    title = _session_title(path)
+
+    cmd = ["claude", "--print", "--resume", path.stem]
+    if fork_session:
+        cmd.append("--fork-session")
+    if permission_mode:
+        cmd += ["--permission-mode", permission_mode]
+    if as_json:
+        cmd += ["--output-format", "json"]
+    cmd.append(message)
+
+    if not yes:
+        click.echo("DRY-RUN (nothing sent). Re-run with --yes to send.")
+        click.echo(f"  session: {path.stem}  ({title})")
+        click.echo(f"  cwd:     {cwd}")
+        click.echo(f"  message: {message}")
+        click.echo(f"  command: {' '.join(shlex.quote(c) for c in cmd)}")
+        return
+
+    if not Path(cwd).is_dir():
+        raise click.ClickException(f"{cwd!r} no longer exists on disk.")
+    try:
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise click.ClickException(f"No reply within {timeout}s (--timeout to extend).")
+    except FileNotFoundError:
+        raise click.ClickException("`claude` not found on PATH.")
+    if result.returncode != 0:
+        raise click.ClickException(
+            result.stderr.strip() or f"claude exited with status {result.returncode}"
+        )
+    click.echo(result.stdout if as_json else result.stdout.strip())
 
 
 if __name__ == "__main__":

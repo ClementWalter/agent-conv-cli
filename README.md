@@ -9,7 +9,8 @@ claude-conv sessions "zama"         # sessions within a matched project
 claude-conv read "zama"             # render the most recent session as a dialogue
 claude-conv search "vault-update"   # full-text search across everything
 claude-conv find "vault-update"     # find a session by name (its derived title)
-claude-conv fork "zama" --yes       # continue a past session as a new one
+claude-conv fork "zama" --yes       # continue a past session interactively, as a new one
+claude-conv send "zama" "..." --yes # send a message into a session headlessly, print the reply
 ```
 
 Claude Code writes every session to
@@ -83,16 +84,24 @@ claude-conv search "vault-update" --project zama  # scoped to one project
 claude-conv find "vault-update"          # find a session by its derived title (name)
 claude-conv fork zama                    # dry-run: shows the session + command it'd launch
 claude-conv fork zama --session 573496f4 --yes  # actually fork that session
+claude-conv send zama "what's the status of #229?"          # dry-run
+claude-conv send zama "what's the status of #229?" --yes    # appends to that same session
+claude-conv send zama "try another approach" --fork --yes   # sends into a NEW branch instead
 ```
 
 `claude-conv --help` lists every subcommand; `claude-conv <cmd> --help` for
 per-command options including `--json`, `--limit`, `--match`, `--nth`,
-`--session`, `--raw`, `--include-subagents`, `--yes`.
+`--session`, `--raw`, `--include-subagents`, `--fork`, `--permission-mode`,
+`--yes`.
 
-Every command supports `--json` for structured output. Only `fork` writes
-anything — and what it "writes" is a brand-new session ID via Claude Code's
-own `--fork-session`, launched as a real interactive process; it defaults to
-a dry-run, same convention as the personal-messaging CLIs' `send` commands.
+Every read command supports `--json` for structured output. `fork` and `send`
+are the two that write: `fork` hands off to a real interactive `claude
+--resume --fork-session` process (a brand-new session ID via Claude Code's
+own fork mechanism); `send` does the headless equivalent via `claude --print
+--resume`, and — unless `--fork` is passed — genuinely continues the *same*
+session, appending the reply exactly as an interactive resume would. Both
+default to a dry-run, same convention as the personal-messaging CLIs' `send`
+commands.
 
 ## How it works
 
@@ -124,6 +133,12 @@ a dry-run, same convention as the personal-messaging CLIs' `send` commands.
   this script entirely so the resumed session gets a proper interactive
   terminal — it `cd`s to the original session's directory first, then runs
   `claude --resume <uuid> --fork-session`.
+- **`send` uses `claude --print --resume` instead** (`subprocess.run`, not
+  `execvp`, so it can capture the reply and return control to the caller) —
+  no TTY needed. Verified live: forking a session with `--permission-mode
+  plan` and a tool-free prompt returns a reply in a few seconds; the
+  original session's turn count is untouched and a `--fork`'d branch (with
+  the reply appended) appears alongside it.
 
 ## Dependencies
 

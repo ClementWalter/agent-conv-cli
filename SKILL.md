@@ -9,13 +9,16 @@ description:
   sessions within a matched project, `claude-conv read <query>` renders a
   session as a dialogue (defaults to the most recent), `claude-conv search
   <text>` full-text-searches across everything, `claude-conv find <text>`
-  locates a session by its derived title (name) across every project, and
+  locates a session by its derived title (name) across every project,
   `claude-conv fork <query>` hands off to `claude --resume --fork-session` to
-  continue a past session as a new one (dry-run by default). No auth, no
-  network — it's a local file reader, the counterpart to
-  imessage-cli/whatsapp-cli/slack-user-cli for your own Claude Code history.
-  Use when the user wants to recall, search, review, or continue a past
-  Claude Code conversation, session, or project's history."
+  continue a past session as a new one interactively (dry-run by default),
+  and `claude-conv send <query> <message>` sends a message into a session
+  non-interactively and prints the reply — headless equivalent of resuming
+  it and typing, appending to that same session unless `--fork` is passed
+  (dry-run by default). No auth, no network — it's a local file reader, the
+  counterpart to imessage-cli/whatsapp-cli/slack-user-cli for your own
+  Claude Code history. Use when the user wants to recall, search, review, or
+  continue a past Claude Code conversation, session, or project's history."
 ---
 
 # Claude Code conversation reader CLI
@@ -44,9 +47,9 @@ conversation** — "what did we decide about X last week", "find that
 conversation where I asked about Y", "show me the session where I built Z",
 "how many sessions have I had in project W".
 
-Everything except `fork` is read-only by construction. `fork` is the one
-command that acts — it launches a real `claude` process — and defaults to a
-dry-run, same convention as the personal-messaging CLIs' `send` commands.
+Everything except `fork`/`send` is read-only by construction. Those two
+launch a real `claude` process — and both default to a dry-run, same
+convention as the personal-messaging CLIs' `send` commands.
 
 ## Commands
 
@@ -110,6 +113,32 @@ interactive `claude` session — run it from an actual terminal, not scripted).
 bin/claude-conv fork zama                     # dry-run: shows what would launch
 bin/claude-conv fork zama --session 573496f4 --yes  # actually fork that session
 ```
+
+### `claude-conv send <query> <message> [--nth N] [--session UUID] [--match N] [--fork] [--permission-mode MODE] [--timeout SECS] [--yes] [--json]`
+
+Send `<message>` into a session non-interactively and print Claude's reply —
+runs `claude --print --resume <uuid> <message>` from that session's own
+directory. **Without `--fork` this appends to the same session**, exactly as
+if you had resumed it in an interactive terminal and typed the message
+yourself; pass `--fork` to branch into a new session instead (same
+`--fork-session` mechanism as `fork`, but the message is sent and the reply
+captured immediately rather than opening a terminal).
+
+```bash
+bin/claude-conv send zama "what's the status of #229?"           # dry-run
+bin/claude-conv send zama "what's the status of #229?" --yes     # actually sends, appends to that session
+bin/claude-conv send zama "try a different approach" --fork --yes  # sends into a NEW branch instead
+```
+
+This is a real write action: the resumed session may run tools (edit files,
+run commands, ...) depending on its permission mode, which is why it defaults
+to a dry-run. `--permission-mode` passes straight through to `claude`
+(`plan`, `acceptEdits`, `bypassPermissions`, `dontAsk`, ...); without it,
+whatever the resumed session's own default is applies — which may block on
+anything needing approval, since there's no interactive terminal to approve
+it in. Verified live: forking a small session with `--permission-mode plan`
+and a tool-free prompt returns a reply in a few seconds, and the original
+session's turn count is untouched (only a `--fork`'d branch grows).
 
 ## Notes
 
