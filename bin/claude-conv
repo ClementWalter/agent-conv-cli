@@ -587,7 +587,12 @@ def read(
         turns = _rendered_session_turns(f, raw, include_subagents, limit=0)
         if not no_mark_read:
             _mark_read(f, state)
-        threads_out.append({"session": f.stem, "cwd": _session_cwd(f) or project.name, "turns": turns})
+        threads_out.append({
+            "session": f.stem,
+            "cwd": _session_cwd(f) or project.name,
+            "title": _session_title(f),
+            "turns": turns,
+        })
     if not no_mark_read:
         _save_read_state(state)
 
@@ -595,7 +600,7 @@ def read(
         click.echo(json.dumps(threads_out, ensure_ascii=False))
         return
     for t in threads_out:
-        click.echo(f"## thread {t['session']} — {len(t['turns'])} turns\n")
+        click.echo(f"## thread {t['session']} — {t['title']} — {len(t['turns'])} turns\n")
         for m in t["turns"]:
             click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
 
@@ -632,6 +637,8 @@ def thread(
     project = _resolve_one_project(query, match)
     path = _pick_session_from_files(_session_files(project), session_uuid, nth)
     out = _rendered_session_turns(path, raw, include_subagents, limit)
+    cwd = _session_cwd(path) or path.parent.name
+    title = _session_title(path)
 
     if not no_mark_read:
         state = _load_read_state()
@@ -639,10 +646,12 @@ def thread(
         _save_read_state(state)
 
     if as_json:
-        click.echo(json.dumps(out, ensure_ascii=False))
+        click.echo(json.dumps(
+            {"session": path.stem, "cwd": cwd, "title": title, "turns": out},
+            ensure_ascii=False,
+        ))
         return
-    cwd = _session_cwd(path) or path.parent.name
-    click.echo(f"# {cwd} — thread {path.stem} — {len(out)} turns\n")
+    click.echo(f"# {cwd} — thread {path.stem} — {title} — {len(out)} turns\n")
     for m in out:
         click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
 
