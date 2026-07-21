@@ -282,9 +282,9 @@ def _drop_tool_injected_followups(turns: list[Turn]) -> list[Turn]:
        `user` turn carrying the tool's actual payload as plain text (e.g. a
        whole SKILL.md body) — genuine API replies from a tool always live
        inside the `tool_result` block itself.
-    2. **A slash command's expansion.** Typing `/vault-update` sends one
-       `user` turn with just the `<command-message>/<command-name>` wrapper
-       (cleaned to `/vault-update` by `_clean_text`), then Claude Code
+    2. **A slash command's expansion.** Typing e.g. `/deploy-checklist` sends
+       one `user` turn with just the `<command-message>/<command-name>`
+       wrapper (cleaned to `/deploy-checklist` by `_clean_text`), then Claude Code
        appends a second `user` turn with the command file's *entire expanded
        body* substituted in — the actual prompt sent to the model, not
        something the human typed or would want to see again.
@@ -429,8 +429,8 @@ def _resolve_one_project(query: str, match: int) -> Path:
     if not candidates:
         raise click.ClickException(f"No project matches {query!r}.")
     if len(candidates) > 1 and not match:
-        # A query like "zama" substring-matches every nested project under it
-        # (worktrees, subpackages, ...) as well as the project itself. If
+        # A query like "myproject" substring-matches every nested project
+        # under it (worktrees, subpackages, ...) as well as the project itself. If
         # exactly one candidate's own directory is *named* the query (its
         # cwd's last path component, case-insensitive), that's unambiguously
         # "the" project the user meant — auto-pick it instead of forcing

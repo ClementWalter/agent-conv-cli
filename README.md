@@ -4,15 +4,15 @@ Terminal access to your **own** Claude Code conversation history by reading
 the local session transcripts read-only:
 
 ```bash
-claude-conv chats                   # projects (channels) you've worked in, most recent first
-claude-conv read "zama"             # list every thread's anchor in that project
-claude-conv thread "zama"           # render the most recent thread in full
-claude-conv read "zama" --expand    # render EVERY thread in that project in full
-claude-conv search "vault-update"   # full-text search across everything
-claude-conv find "vault-update"     # find a thread by name (its derived title)
-claude-conv fork "zama" --yes       # continue a past thread interactively, as a new one
-claude-conv send "zama" "..." --yes # send a message into a thread headlessly, print the reply
-claude-conv unread                  # what's new since you last viewed it
+claude-conv chats                        # projects (channels) you've worked in, most recent first
+claude-conv read "myproject"              # list every thread's anchor in that project
+claude-conv thread "myproject"            # render the most recent thread in full
+claude-conv read "myproject" --expand     # render EVERY thread in that project in full
+claude-conv search "deploy-checklist"     # full-text search across everything
+claude-conv find "deploy-checklist"       # find a thread by name (its derived title)
+claude-conv fork "myproject" --yes        # continue a past thread interactively, as a new one
+claude-conv send "myproject" "..." --yes  # send a message into a thread headlessly, print the reply
+claude-conv unread                        # what's new since you last viewed it
 ```
 
 Claude Code writes every session to
@@ -66,7 +66,7 @@ cd claude-conv-cli
 [Vercel Labs `skills`](https://github.com/vercel-labs/skills) format:
 
 ```bash
-npx skills add ClementWalter/claude-conv-cli
+npx skills add <owner>/claude-conv-cli
 ```
 
 This drops the skill under `~/.agents/skills/claude-conv-cli/` and symlinks it
@@ -85,28 +85,28 @@ ln -s "$(pwd)" ~/.claude/skills/claude-conv-cli
 ## Usage
 
 ```bash
-claude-conv chats                        # projects/channels, most recently active first
-claude-conv chats --limit 100 --json     # everything, machine-readable
-claude-conv read zama                    # every thread's anchor in "zama" — title, turns, timestamp
-claude-conv read zama --match 2          # disambiguate when multiple projects match
-claude-conv read zama --expand           # every thread in that project, in full
-claude-conv read zama --expand --limit 5 # cap to the 5 most recent threads, in full
-claude-conv thread zama                  # ONE thread in full — most recently active by default
-claude-conv thread zama --nth 2          # the thread before the most recent one
-claude-conv thread zama --session 573496f4  # an exact thread, by session-UUID prefix
-claude-conv thread zama --limit 20       # only its last 20 turns
-claude-conv thread zama --raw            # include thinking + tool call/result blocks
-claude-conv search "vault-update"        # full-text search across every project
-claude-conv search "vault-update" --project zama  # scoped to one project
-claude-conv find "vault-update"          # find a thread by its derived title (name)
-claude-conv fork zama                    # dry-run: shows the thread + command it'd launch
-claude-conv fork zama --session 573496f4 --yes  # actually fork that thread
-claude-conv send zama "what's the status of #229?"          # dry-run
-claude-conv send zama "what's the status of #229?" --yes    # appends to that same thread
-claude-conv send zama "try another approach" --fork --yes   # sends into a NEW branch instead
-claude-conv unread                       # everything unread, across every project
-claude-conv unread --project zama        # scoped to one project
-claude-conv unread --mark-all-read       # catch up in bulk instead of listing
+claude-conv chats                                     # projects/channels, most recently active first
+claude-conv chats --limit 100 --json                  # everything, machine-readable
+claude-conv read myproject                            # every thread's anchor: title, turns, timestamp
+claude-conv read myproject --match 2                  # disambiguate when multiple projects match
+claude-conv read myproject --expand                   # every thread in that project, in full
+claude-conv read myproject --expand --limit 5         # cap to the 5 most recent threads, in full
+claude-conv thread myproject                          # ONE thread in full — most recently active by default
+claude-conv thread myproject --nth 2                  # the thread before the most recent one
+claude-conv thread myproject --session a1b2c3d4       # an exact thread, by session-UUID prefix
+claude-conv thread myproject --limit 20               # only its last 20 turns
+claude-conv thread myproject --raw                    # include thinking + tool call/result blocks
+claude-conv search "deploy-checklist"                 # full-text search across every project
+claude-conv search "deploy-checklist" --project myproject  # scoped to one project
+claude-conv find "deploy-checklist"                   # find a thread by its derived title (name)
+claude-conv fork myproject                            # dry-run: shows the thread + command it'd launch
+claude-conv fork myproject --session a1b2c3d4 --yes   # actually fork that thread
+claude-conv send myproject "what's the status of #123?"          # dry-run
+claude-conv send myproject "what's the status of #123?" --yes    # appends to that same thread
+claude-conv send myproject "try another approach" --fork --yes   # sends into a NEW branch instead
+claude-conv unread                                    # everything unread, across every project
+claude-conv unread --project myproject                # scoped to one project
+claude-conv unread --mark-all-read                    # catch up in bulk instead of listing
 ```
 
 `claude-conv --help` lists every subcommand; `claude-conv <cmd> --help` for
@@ -154,8 +154,8 @@ commands.
   Skill replies with a short `tool_result` ack then a follow-up turn carrying
   the full `SKILL.md` body as plain text; and typing `/name` sends the
   trigger turn, then Claude Code appends a follow-up turn with the slash
-  command's entire expanded prompt body substituted in (otherwise `/vault-
-  update` reads as that one line, immediately followed by a wall of the
+  command's entire expanded prompt body substituted in (otherwise a slash
+  command reads as that one line, immediately followed by a wall of the
   command file's own instructions before the assistant ever replies). Pass
   `--raw` to disable all of this and see everything, including thinking
   blocks and full tool-call/tool-result detail.
@@ -203,11 +203,9 @@ conversations. Cross-platform (pure file reads).
 
 ## See also
 
-Same idea — your own messages, from the terminal, for other channels:
+Same idea — your own messages, from the terminal, for other channels
+(companion tools, same author):
 
-- [imessage-cli](https://github.com/ClementWalter/imessage-cli) — your
-  personal iMessage/SMS history
-- [whatsapp-cli](https://github.com/ClementWalter/whatsapp-cli) — your
-  personal WhatsApp chats (pairs as a linked device)
-- [slack-user-cli](https://github.com/ClementWalter/slack-user-cli) — Slack
-  via your existing browser session credentials
+- **imessage-cli** — your personal iMessage/SMS history
+- **whatsapp-cli** — your personal WhatsApp chats (pairs as a linked device)
+- **slack-user-cli** — Slack via your existing browser session credentials

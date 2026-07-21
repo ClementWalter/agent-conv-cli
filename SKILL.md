@@ -86,10 +86,10 @@ The channel's top-level view — never targets a single thread (use `thread`
 for that):
 
 ```bash
-bin/claude-conv read zama                     # every thread's anchor: title, turns, timestamp
-bin/claude-conv read zama --expand            # every thread's FULL content, one after another
-bin/claude-conv read zama --expand --limit 5  # cap to the 5 most recent threads in expand mode
-bin/claude-conv read zama --raw               # (with --expand) include thinking + tool_use/tool_result
+bin/claude-conv read myproject                     # every thread's anchor: title, turns, timestamp
+bin/claude-conv read myproject --expand            # every thread's FULL content, one after another
+bin/claude-conv read myproject --expand --limit 5  # cap to the 5 most recent threads in expand mode
+bin/claude-conv read myproject --raw               # (with --expand) include thinking + tool_use/tool_result
 ```
 
 Bare, `--limit` caps how many threads are *listed*; with `--expand`, `--limit`
@@ -104,11 +104,11 @@ Read exactly one thread in full — Slack's `thread <channel> <ts>`, standing
 in a UUID or position (`--nth`) for the `ts` Slack would use:
 
 ```bash
-bin/claude-conv thread zama                    # most recently active thread, in full
-bin/claude-conv thread zama --nth 2            # the thread before that
-bin/claude-conv thread zama --session 573496f4 # an exact thread (session UUID prefix)
-bin/claude-conv thread zama --limit 20         # only its last 20 turns
-bin/claude-conv thread zama --raw              # include thinking + tool_use/tool_result blocks
+bin/claude-conv thread myproject                    # most recently active thread, in full
+bin/claude-conv thread myproject --nth 2            # the thread before that
+bin/claude-conv thread myproject --session a1b2c3d4 # an exact thread (session UUID prefix)
+bin/claude-conv thread myproject --limit 20         # only its last 20 turns
+bin/claude-conv thread myproject --raw              # include thinking + tool_use/tool_result blocks
 ```
 
 Compact mode (default) shows only genuine assistant prose and user text.
@@ -121,7 +121,7 @@ for genuine input. Two things produce this: Skill replies with a short
 `tool_result` ack then a follow-up turn carrying the full SKILL.md body as
 plain text; and typing `/name` sends the trigger turn, then Claude Code
 appends a follow-up turn with the slash command's entire expanded prompt
-body substituted in. Both follow-ups are dropped, so `/vault-update` reads as
+body substituted in. Both follow-ups are dropped, so `/deploy-checklist` reads as
 just that, immediately followed by the assistant's actual response.
 Subagent/sidechain forks are excluded unless `--include-subagents` is
 passed. `--raw` disables all of this and shows everything, including thinking
@@ -156,7 +156,7 @@ again.
 
 ```bash
 bin/claude-conv unread                        # everything unread, across every project
-bin/claude-conv unread --project zama         # scoped to one project
+bin/claude-conv unread --project myproject    # scoped to one project
 bin/claude-conv unread --mark-all-read        # catch up in bulk instead of listing
 ```
 
@@ -176,8 +176,8 @@ the current process and hands the terminal off to a real, writable
 interactive `claude` session — run it from an actual terminal, not scripted).
 
 ```bash
-bin/claude-conv fork zama                     # dry-run: shows what would launch
-bin/claude-conv fork zama --session 573496f4 --yes  # actually fork that thread
+bin/claude-conv fork myproject                     # dry-run: shows what would launch
+bin/claude-conv fork myproject --session a1b2c3d4 --yes  # actually fork that thread
 ```
 
 ### `claude-conv send <query> <message> [--nth N] [--session UUID] [--match N] [--fork] [--permission-mode MODE] [--timeout SECS] [--yes] [--json]`
@@ -191,9 +191,9 @@ yourself; pass `--fork` to branch into a new thread instead (same
 captured immediately rather than opening a terminal).
 
 ```bash
-bin/claude-conv send zama "what's the status of #229?"           # dry-run
-bin/claude-conv send zama "what's the status of #229?" --yes     # actually sends, appends to that thread
-bin/claude-conv send zama "try a different approach" --fork --yes  # sends into a NEW branch instead
+bin/claude-conv send myproject "what's the status of #123?"           # dry-run
+bin/claude-conv send myproject "what's the status of #123?" --yes     # actually sends, appends to that thread
+bin/claude-conv send myproject "try a different approach" --fork --yes  # sends into a NEW branch instead
 ```
 
 This is a real write action: the resumed thread may run tools (edit files,
