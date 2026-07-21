@@ -259,34 +259,59 @@ def _render_turn(turn: Turn, raw: bool) -> str | None:
     return "\n".join(parts)
 
 
+def _is_command_wrapper_turn(turn: Turn) -> bool:
+    """A user turn whose text is (or contains) the `<command-message>...
+    <command-name>...` wrapper — the "/name" trigger, before Claude Code's
+    separate follow-up turn expands it into the full command body."""
+    return turn.role == "user" and any(
+        b.get("type") == "text" and _COMMAND_WRAPPER_RE.search(b.get("text", ""))
+        for b in turn.blocks
+    )
+
+
 def _drop_tool_injected_followups(turns: list[Turn]) -> list[Turn]:
     """Drop a "user" turn that is really injected content, not human input.
 
-    Some tools (Skill is the main one) reply with a short `tool_result` ack
-    *and then a separate, later `user` turn* carrying the tool's actual
-    payload as plain text (e.g. a whole SKILL.md body) — genuine API replies
-    from a tool always live inside the `tool_result` block itself, so a
-    second, bare-text `user` turn immediately after one, with no assistant
-    turn in between, is never something a human typed. Only applies in
-    compact mode; --raw keeps everything.
+    Two distinct cases produce this, both a bare-text `user` turn immediately
+    following another `user` turn with no assistant turn in between — never
+    something a human typed, since a real reply always follows an assistant
+    turn:
+
+    1. **A tool's injected payload.** Some tools (Skill is the main one)
+       reply with a short `tool_result` ack *and then a separate, later*
+       `user` turn carrying the tool's actual payload as plain text (e.g. a
+       whole SKILL.md body) — genuine API replies from a tool always live
+       inside the `tool_result` block itself.
+    2. **A slash command's expansion.** Typing `/vault-update` sends one
+       `user` turn with just the `<command-message>/<command-name>` wrapper
+       (cleaned to `/vault-update` by `_clean_text`), then Claude Code
+       appends a second `user` turn with the command file's *entire expanded
+       body* substituted in — the actual prompt sent to the model, not
+       something the human typed or would want to see again.
+
+    Only applies in compact mode; --raw keeps everything.
     """
     filtered: list[Turn] = []
     last_tool_names: set[str] = set()
     prev_role: str | None = None
+    prev_was_command_wrapper = False
     for t in turns:
+        is_bare_text = all(b.get("type") == "text" for b in t.blocks)
         is_synthetic_followup = (
             t.role == "user"
             and prev_role == "user"
-            and "Skill" in last_tool_names
-            and all(b.get("type") == "text" for b in t.blocks)
+            and is_bare_text
+            and ("Skill" in last_tool_names or prev_was_command_wrapper)
         )
         if is_synthetic_followup:
             prev_role = t.role
+            prev_was_command_wrapper = False
             continue
         if t.role == "assistant":
             last_tool_names = {
                 b.get("name") for b in t.blocks if b.get("type") == "tool_use"
             }
+        prev_was_command_wrapper = _is_command_wrapper_turn(t)
         filtered.append(t)
         prev_role = t.role
     return filtered

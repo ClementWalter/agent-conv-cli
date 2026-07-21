@@ -147,13 +147,18 @@ commands.
 - **Compact rendering by default.** Only genuine user/assistant text is
   shown: `<system-reminder>` and `<task-notification>` blocks are stripped,
   slash-command wrappers collapse to `/name`, and a turn that was pure
-  tool-calling is dropped entirely (no placeholder). A "user" turn that's
-  really a tool's injected payload rather than human input is dropped too —
-  Skill replies with a short `tool_result` ack and then a *separate*
-  follow-up `user` turn carrying the full `SKILL.md` body as plain text,
-  which otherwise reads as a wall of unrelated instructions in the middle of
-  the conversation. Pass `--raw` to disable all of this and see everything,
-  including thinking blocks and full tool-call/tool-result detail.
+  tool-calling is dropped entirely (no placeholder). Any "user" turn that's
+  really injected content rather than something you typed is dropped too —
+  detected as a *separate* follow-up `user` turn with no assistant turn in
+  between, which never happens for genuine input. Two things produce this:
+  Skill replies with a short `tool_result` ack then a follow-up turn carrying
+  the full `SKILL.md` body as plain text; and typing `/name` sends the
+  trigger turn, then Claude Code appends a follow-up turn with the slash
+  command's entire expanded prompt body substituted in (otherwise `/vault-
+  update` reads as that one line, immediately followed by a wall of the
+  command file's own instructions before the assistant ever replies). Pass
+  `--raw` to disable all of this and see everything, including thinking
+  blocks and full tool-call/tool-result detail.
 - **Subagent forks are excluded by default** (`isSidechain: true` events) —
   pass `--include-subagents` to include them.
 - **Search is a two-stage filter**: a substring check on raw file bytes before

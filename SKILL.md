@@ -114,11 +114,16 @@ bin/claude-conv thread zama --raw              # include thinking + tool_use/too
 Compact mode (default) shows only genuine assistant prose and user text.
 Stripped entirely: `<system-reminder>` and `<task-notification>` blocks,
 slash-command wrappers (collapsed to `/name`), turns that were pure
-tool-calling (no placeholder shown — just dropped), and a "user" turn that's
-really a tool's injected payload rather than human input (Skill replies with
-a short `tool_result` ack and then a *separate* follow-up `user` turn
-carrying the full SKILL.md body as plain text — that follow-up is dropped
-too). Subagent/sidechain forks are excluded unless `--include-subagents` is
+tool-calling (no placeholder shown — just dropped), and any "user" turn
+that's really injected content rather than something you typed — a *separate*
+follow-up `user` turn with no assistant turn in between, which never happens
+for genuine input. Two things produce this: Skill replies with a short
+`tool_result` ack then a follow-up turn carrying the full SKILL.md body as
+plain text; and typing `/name` sends the trigger turn, then Claude Code
+appends a follow-up turn with the slash command's entire expanded prompt
+body substituted in. Both follow-ups are dropped, so `/vault-update` reads as
+just that, immediately followed by the assistant's actual response.
+Subagent/sidechain forks are excluded unless `--include-subagents` is
 passed. `--raw` disables all of this and shows everything, including thinking
 and full tool_use/tool_result detail. Marks the thread read (see `unread`)
 unless `--no-mark-read` is passed.
