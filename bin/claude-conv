@@ -13,24 +13,28 @@ each line is an event with a `type` (`user` / `assistant` / bookkeeping types li
 `mode`, `file-history-snapshot`, `attachment`), and `message.content` is either a
 plain string or a list of content blocks (`text`, `thinking`, `tool_use`,
 `tool_result`). This is the personal-history counterpart to the iMessage/WhatsApp/
-Slack/Telegram readers: list "chats" (projects you've worked in), read a session's
-transcript, search across everything.
+Slack/Telegram readers.
 
-Two things drive the design:
+Same shape as Slack, one level up: a project (the directory you ran `claude`
+in) is a channel, and a session IS a thread — an anchor message (its first
+turn) plus every turn tied to it. So the command set mirrors Slack's exactly:
 
 * **The directory name is not the source of truth for the project path.** Claude
-  Code encodes the cwd by replacing path separators with `-`, which is lossy (a
-  real dash in a folder name is indistinguishable from an encoded slash). Every
-  event line carries the *actual* `cwd` string instead, so that's what this CLI
-  reads — the directory name is only ever used to locate the files.
-* **A "chat" here is a project, not a person.** There's no chat partner to
-  message — this is a read-only history of your own sessions with Claude Code
-  in a given codebase. `chats` lists projects (most recently active first),
-  `sessions <query>` lists individual sessions within a matched project, `read`
-  renders one session as a dialogue, `search` full-text-searches across all of
-  them, `find` locates a session by its derived title across every project,
-  and `fork` hands off to a real `claude --resume --fork-session` process to
-  continue a past session as a new one.
+  Code encodes the cwd by replacing path separators (and dots) with `-`, which
+  is lossy on its own (a real dash in a folder name is indistinguishable from
+  an encoded slash). Every event line carries the *actual* `cwd` string
+  instead, so that's what this CLI reconciles against the directory name —
+  the directory name is only ever used to locate the files.
+* `chats` lists projects/channels (most recently active first). `read` mirrors
+  Slack's `read <channel>`: bare, it lists every thread's anchor (the
+  channel's top-level view); `--expand` inlines every thread's full content,
+  like `--expand-thread`. `thread <query>` mirrors Slack's `thread <channel>
+  <ts>`: reads exactly one thread in full (defaults to the most recent;
+  `--nth`/`--session` to pick another). `search` full-text-searches across
+  everything; `find` locates a thread by its derived title (name) across
+  every project. `fork` hands off to a real `claude --resume --fork-session`
+  process to continue a past thread as a new one; `send` does the same
+  headlessly and prints the reply.
 
 Reading is entirely local and read-only — Claude Code owns these files and
 nothing here mutates them. `fork` and `send` are the two commands that act:
@@ -373,7 +377,7 @@ def _project_summary(project_dir: Path, read_state: dict | None = None) -> dict:
     return {
         "cwd": _project_cwd(project_dir),
         "dir": project_dir.name,
-        "sessions": len(files),
+        "threads": len(files),
         "unread": sum(1 for f in files if _is_unread(f, state)),
         "last_active": datetime.fromtimestamp(last_mtime).strftime("%Y-%m-%d %H:%M")
         if last_mtime
@@ -412,7 +416,7 @@ def _resolve_one_project(query: str, match: int) -> Path:
         click.echo(f"Multiple projects match {query!r} — pick with --match N:", err=True)
         for i, d in enumerate(candidates[:20], 1):
             summary = _project_summary(d)
-            click.echo(f"  {i}. {summary['cwd']}  ({summary['sessions']} sessions)", err=True)
+            click.echo(f"  {i}. {summary['cwd']}  ({summary['threads']} threads)", err=True)
         raise SystemExit(1)
     return candidates[match - 1 if match else 0]
 
@@ -442,15 +446,15 @@ def _resolve_one_session(
 
 
 def _print_session_list(project: Path, files: list[Path], as_json: bool) -> None:
-    """The "top-level" view of a project: one line per session (its anchor),
-    no content — shared by `sessions` and bare `read` (no --session/--nth)."""
+    """The channel's top-level view: one line per thread (its anchor), no
+    content — bare `read`'s output."""
     state = _load_read_state()
     out = [_session_summary(f, read_state=state) for f in files]
     if as_json:
         click.echo(json.dumps(out, ensure_ascii=False))
         return
     cwd = out[0]["cwd"] if out else project.name
-    click.echo(f"# {cwd} — {len(out)} session(s), most recently active first\n")
+    click.echo(f"# {cwd} — {len(out)} thread(s), most recently active first\n")
     for s in out:
         last = s["end"] or s["start"]
         mark = "● " if s["unread"] else "  "
@@ -488,7 +492,7 @@ def cli() -> None:
 @click.option("--limit", default=30, help="Number of projects to list.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def chats(limit: int, as_json: bool) -> None:
-    """List projects ("chats"), most recently active first."""
+    """List projects (channels), most recently active first."""
     state = _load_read_state()
     projects = sorted(
         (_project_summary(d, read_state=state) for d in _iter_project_dirs()),
@@ -500,77 +504,39 @@ def chats(limit: int, as_json: bool) -> None:
         return
     for p in projects:
         unread = f", {p['unread']} unread" if p["unread"] else ""
-        click.echo(f"{p['last_active']}  {p['cwd']}  ({p['sessions']} sessions{unread})")
+        click.echo(f"{p['last_active']}  {p['cwd']}  ({p['threads']} threads{unread})")
 
 
 @cli.command()
 @click.argument("query")
-@click.option("--limit", default=30, help="Number of sessions to list.")
+@click.option("--expand", is_flag=True, help="Show every thread's full content instead of just its anchor.")
+@click.option("--limit", default=0, help="Cap on threads shown (0 = no cap).")
 @click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
-@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
-def sessions(query: str, limit: int, match: int, as_json: bool) -> None:
-    """List sessions within the project matching QUERY, most recent first.
-
-    Equivalent to bare `read QUERY` (no --session/--nth/--expand) — kept as
-    its own command because "list the sessions" and "read the top-level
-    view of this project" are the same operation.
-    """
-    project = _resolve_one_project(query, match)
-    _print_session_list(project, _session_files(project)[:limit], as_json)
-
-
-@cli.command()
-@click.argument("query")
-@click.option("--session", "session_uuid", help="Read exactly this session in full (UUID or prefix).")
-@click.option("--nth", type=int, default=None, help="Read the Nth session in full, 1 = most recent. Passing this (or --session) switches into single-session mode.")
-@click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
-@click.option("--expand", is_flag=True, help="In list mode (no --session/--nth), show every session's full content instead of just its anchor.")
-@click.option("--limit", default=0, help="Cap: turns shown in single-session mode, sessions shown in list/--expand mode (0 = no cap).")
-@click.option("--raw", is_flag=True, help="Include thinking blocks and tool calls/results.")
-@click.option("--include-subagents", is_flag=True, help="Include forked subagent turns.")
-@click.option("--no-mark-read", is_flag=True, help="Don't mark read session(s) as read.")
+@click.option("--raw", is_flag=True, help="With --expand: include thinking blocks and tool calls/results.")
+@click.option("--include-subagents", is_flag=True, help="With --expand: include forked subagent turns.")
+@click.option("--no-mark-read", is_flag=True, help="With --expand: don't mark the threads shown as read.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def read(
     query: str,
-    session_uuid: str | None,
-    nth: int | None,
-    match: int,
     expand: bool,
     limit: int,
+    match: int,
     raw: bool,
     include_subagents: bool,
     no_mark_read: bool,
     as_json: bool,
 ) -> None:
-    """Read the project matching QUERY — same shape as a Slack channel read.
+    """Read the project (channel) matching QUERY — a project IS a channel, a
+    session IS a thread (its anchor = first turn, plus every turn tied to it).
 
-    Bare (no --session/--nth): lists every session's anchor (title, turn
-    count, timestamp) — the project's top-level view, identical to
-    `sessions QUERY`. Add --expand to inline every session's full content
-    instead, like Slack's `--expand-thread`. Pass --session or --nth to read
-    exactly one session in full — the equivalent of Slack's `thread`, reading
-    one specific anchor + everything tied to it. Marks whatever full content
-    gets shown as read (see `unread`) unless --no-mark-read is passed.
+    Bare: every thread's anchor (title, turn count, timestamp), most recently
+    active first — the channel's top-level view, nothing expanded. `--expand`
+    inlines every thread's full content instead — exactly Slack's
+    `read`/`--expand-thread`. To read exactly one thread in full, use
+    `thread QUERY` (Slack's `thread <channel> <ts>`), not this command.
     """
     project = _resolve_one_project(query, match)
     files = _session_files(project)
-
-    if session_uuid is not None or nth is not None:
-        path = _pick_session_from_files(files, session_uuid, nth or 1)
-        out = _rendered_session_turns(path, raw, include_subagents, limit)
-        if not no_mark_read:
-            state = _load_read_state()
-            _mark_read(path, state)
-            _save_read_state(state)
-        if as_json:
-            click.echo(json.dumps(out, ensure_ascii=False))
-            return
-        cwd = _session_cwd(path) or path.parent.name
-        click.echo(f"# {cwd} — session {path.stem} — {len(out)} turns\n")
-        for m in out:
-            click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
-        return
-
     session_files = files[:limit] if limit else files
 
     if not expand:
@@ -578,22 +544,69 @@ def read(
         return
 
     state = _load_read_state()
-    sessions_out = []
+    threads_out = []
     for f in session_files:
         turns = _rendered_session_turns(f, raw, include_subagents, limit=0)
         if not no_mark_read:
             _mark_read(f, state)
-        sessions_out.append({"session": f.stem, "cwd": _session_cwd(f) or project.name, "turns": turns})
+        threads_out.append({"session": f.stem, "cwd": _session_cwd(f) or project.name, "turns": turns})
     if not no_mark_read:
         _save_read_state(state)
 
     if as_json:
-        click.echo(json.dumps(sessions_out, ensure_ascii=False))
+        click.echo(json.dumps(threads_out, ensure_ascii=False))
         return
-    for s in sessions_out:
-        click.echo(f"## session {s['session']} — {len(s['turns'])} turns\n")
-        for m in s["turns"]:
+    for t in threads_out:
+        click.echo(f"## thread {t['session']} — {len(t['turns'])} turns\n")
+        for m in t["turns"]:
             click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--session", "session_uuid", help="Read exactly this thread in full (session UUID or prefix).")
+@click.option("--nth", default=1, help="Which thread to read, 1 = most recent (default).")
+@click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
+@click.option("--limit", default=0, help="Only show the last N turns (0 = all).")
+@click.option("--raw", is_flag=True, help="Include thinking blocks and tool calls/results.")
+@click.option("--include-subagents", is_flag=True, help="Include forked subagent turns.")
+@click.option("--no-mark-read", is_flag=True, help="Don't mark this thread as read.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def thread(
+    query: str,
+    session_uuid: str | None,
+    nth: int,
+    match: int,
+    limit: int,
+    raw: bool,
+    include_subagents: bool,
+    no_mark_read: bool,
+    as_json: bool,
+) -> None:
+    """Read one thread (session) in full, from the project matching QUERY —
+    Slack's `thread <channel> <ts>`, with a UUID/--nth position standing in
+    for Slack's message ts since a session has no natural timestamp handle.
+
+    Defaults to the most recently active thread; pick another with --nth
+    (2 = the one before, ...) or target an exact --session UUID. Marks it
+    read (see `unread`) unless --no-mark-read is passed.
+    """
+    project = _resolve_one_project(query, match)
+    path = _pick_session_from_files(_session_files(project), session_uuid, nth)
+    out = _rendered_session_turns(path, raw, include_subagents, limit)
+
+    if not no_mark_read:
+        state = _load_read_state()
+        _mark_read(path, state)
+        _save_read_state(state)
+
+    if as_json:
+        click.echo(json.dumps(out, ensure_ascii=False))
+        return
+    cwd = _session_cwd(path) or path.parent.name
+    click.echo(f"# {cwd} — thread {path.stem} — {len(out)} turns\n")
+    for m in out:
+        click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
 
 
 @cli.command()
@@ -653,20 +666,21 @@ def search(text: str, project_query: str | None, limit: int, as_json: bool) -> N
 
 @cli.command()
 @click.option("--project", "project_query", help="Restrict to projects matching this query (default: all).")
-@click.option("--limit", default=30, help="Number of sessions to show.")
+@click.option("--limit", default=30, help="Number of threads to show.")
 @click.option("--mark-all-read", is_flag=True, help="Don't list anything — just mark everything currently unread as read.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def unread(project_query: str | None, limit: int, mark_all_read: bool, as_json: bool) -> None:
-    """List sessions with activity you haven't seen via `read` yet.
+    """List threads with activity you haven't seen yet.
 
     This is local bookkeeping only (~/.config/claude-conv-cli/read-state.json,
     override with $CLAUDE_CONV_STATE_DIR) — Claude Code itself has no concept
-    of read/unread. A session counts as unread until you `read` it (or catch
-    up in bulk with --mark-all-read): never-opened sessions default to
-    unread, same as a message you've never opened, and new activity since the
-    last time makes it unread again. The very first run will likely show your
-    whole history as unread — run `unread --mark-all-read` once to start
-    clean, then let normal `read` usage keep it current.
+    of read/unread. A thread counts as unread until you view its full content
+    via `thread` or `read --expand` (or catch up in bulk with
+    --mark-all-read): never-opened threads default to unread, same as a
+    message you've never opened, and new activity since the last time makes
+    it unread again. The very first run will likely show your whole history
+    as unread — run `unread --mark-all-read` once to start clean, then let
+    normal usage keep it current.
     """
     state = _load_read_state()
     project_dirs = _match_projects(project_query) if project_query else list(_iter_project_dirs())
@@ -676,7 +690,7 @@ def unread(project_query: str | None, limit: int, mark_all_read: bool, as_json: 
         for f in unread_files:
             _mark_read(f, state)
         _save_read_state(state)
-        click.echo(f"Marked {len(unread_files)} session(s) as read.")
+        click.echo(f"Marked {len(unread_files)} thread(s) as read.")
         return
 
     unread_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
@@ -695,16 +709,16 @@ def unread(project_query: str | None, limit: int, mark_all_read: bool, as_json: 
 
 @cli.command()
 @click.argument("text")
-@click.option("--limit", default=30, help="Number of sessions to show.")
+@click.option("--limit", default=30, help="Number of threads to show.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def find(text: str, limit: int, as_json: bool) -> None:
-    """Find sessions by name — i.e. by their derived title — across every project.
+    """Find a thread by name — i.e. by its derived title — across every project.
 
-    Claude Code doesn't store a session title, so "name" here is the first
-    substantive thing you said in that session (same text `chats`/`sessions`
-    derive titles from). Unlike `search`, which matches anywhere in a
-    transcript and returns one row per matching turn, this matches only the
-    title and returns one row per session.
+    Claude Code doesn't store a thread title, so "name" here is the first
+    substantive thing you said in it (same text `chats`/`read` derive titles
+    from). Unlike `search`, which matches anywhere in a transcript and
+    returns one row per matching turn, this matches only the title and
+    returns one row per thread.
     """
     needle = text.lower()
     needle_bytes = text.encode("utf-8")
@@ -735,20 +749,20 @@ def find(text: str, limit: int, as_json: bool) -> None:
 
 @cli.command()
 @click.argument("query")
-@click.option("--nth", default=1, help="Which session to fork, 1 = most recent (default).")
+@click.option("--nth", default=1, help="Which thread to fork, 1 = most recent (default).")
 @click.option("--session", "session_uuid", help="Exact session UUID (or prefix) instead of the Nth most recent.")
 @click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
 @click.option("--yes", is_flag=True, help="Actually launch. Without it, prints the resolved command as a dry-run.")
 def fork(query: str, nth: int, session_uuid: str | None, match: int, yes: bool) -> None:
-    """Continue a past session as a NEW session, leaving the original untouched.
+    """Continue a past thread as a NEW thread, leaving the original untouched.
 
-    Resolves a session the same way `read` does (project QUERY + --nth /
+    Resolves a thread the same way `thread` does (project QUERY + --nth /
     --session), then hands off to `claude --resume <uuid> --fork-session` —
     Claude Code's own mechanism for branching a past conversation into a
     fresh session ID instead of mutating the one being resumed. This is the
     one command that actually launches something: it replaces this process
     and takes over the terminal for an interactive `claude` session, from the
-    original session's working directory.
+    original thread's working directory.
 
     Defaults to a dry-run that prints what would be launched. Pass --yes to
     actually do it.
@@ -759,14 +773,14 @@ def fork(query: str, nth: int, session_uuid: str | None, match: int, yes: bool) 
 
     if not yes:
         click.echo("DRY-RUN (nothing launched). Re-run with --yes to fork.")
-        click.echo(f"  session: {path.stem}  ({title})")
+        click.echo(f"  thread:  {path.stem}  ({title})")
         click.echo(f"  cwd:     {cwd}")
         click.echo(f"  command: claude --resume {path.stem} --fork-session")
         return
 
     if not Path(cwd).is_dir():
         raise click.ClickException(f"{cwd!r} no longer exists on disk — can't cd there to fork.")
-    click.echo(f"Forking session {path.stem} from {cwd} ...", err=True)
+    click.echo(f"Forking thread {path.stem} from {cwd} ...", err=True)
     os.chdir(cwd)
     try:
         os.execvp("claude", ["claude", "--resume", path.stem, "--fork-session"])
@@ -777,10 +791,10 @@ def fork(query: str, nth: int, session_uuid: str | None, match: int, yes: bool) 
 @cli.command()
 @click.argument("query")
 @click.argument("message")
-@click.option("--nth", default=1, help="Which session to continue, 1 = most recent (default).")
+@click.option("--nth", default=1, help="Which thread to continue, 1 = most recent (default).")
 @click.option("--session", "session_uuid", help="Exact session UUID (or prefix) instead of the Nth most recent.")
 @click.option("--match", default=0, help="Pick the Nth matching project (1-based).")
-@click.option("--fork", "fork_session", is_flag=True, help="Continue as a NEW session instead of appending to the original (like `fork`).")
+@click.option("--fork", "fork_session", is_flag=True, help="Continue as a NEW thread instead of appending to the original (like `fork`).")
 @click.option("--permission-mode", help="Passed through to claude, e.g. plan / acceptEdits / bypassPermissions / dontAsk.")
 @click.option("--timeout", default=300, help="Seconds to wait for a reply before giving up.")
 @click.option("--yes", is_flag=True, help="Actually send. Without it, prints the resolved command as a dry-run.")
@@ -797,17 +811,17 @@ def send(
     yes: bool,
     as_json: bool,
 ) -> None:
-    """Send MESSAGE into a session non-interactively and print Claude's reply.
+    """Send MESSAGE into a thread non-interactively and print Claude's reply.
 
-    Runs `claude --print --resume <uuid> MESSAGE` from the session's own
+    Runs `claude --print --resume <uuid> MESSAGE` from the thread's own
     directory — the headless equivalent of resuming it in an interactive
     terminal and typing MESSAGE, without needing a TTY. Without --fork, this
-    *is* resuming that exact session: the reply gets appended to the same
+    *is* resuming that exact thread: the reply gets appended to the same
     session file, exactly as if you'd typed it interactively. Pass --fork to
-    branch into a new session instead (like `fork`, but with the message sent
+    branch into a new thread instead (like `fork`, but with the message sent
     and the reply captured immediately rather than opening a terminal).
 
-    This is a real write action — the resumed session may run tools (edit
+    This is a real write action — the resumed thread may run tools (edit
     files, run commands, ...) depending on its permission mode, which is why
     it defaults to a dry-run. Pass --yes to actually run it. `--permission-mode`
     is passed straight through to `claude`; without it, whatever your global/
@@ -829,7 +843,7 @@ def send(
 
     if not yes:
         click.echo("DRY-RUN (nothing sent). Re-run with --yes to send.")
-        click.echo(f"  session: {path.stem}  ({title})")
+        click.echo(f"  thread:  {path.stem}  ({title})")
         click.echo(f"  cwd:     {cwd}")
         click.echo(f"  message: {message}")
         click.echo(f"  command: {' '.join(shlex.quote(c) for c in cmd)}")

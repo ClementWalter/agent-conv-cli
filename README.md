@@ -4,28 +4,35 @@ Terminal access to your **own** Claude Code conversation history by reading
 the local session transcripts read-only:
 
 ```bash
-claude-conv chats                   # projects you've worked in, most recent first
-claude-conv read "zama"             # list every session's anchor in that project
-claude-conv read "zama" --nth 1     # render the most recent session in full
-claude-conv read "zama" --expand    # render EVERY session in that project in full
+claude-conv chats                   # projects (channels) you've worked in, most recent first
+claude-conv read "zama"             # list every thread's anchor in that project
+claude-conv thread "zama"           # render the most recent thread in full
+claude-conv read "zama" --expand    # render EVERY thread in that project in full
 claude-conv search "vault-update"   # full-text search across everything
-claude-conv find "vault-update"     # find a session by name (its derived title)
-claude-conv fork "zama" --yes       # continue a past session interactively, as a new one
-claude-conv send "zama" "..." --yes # send a message into a session headlessly, print the reply
-claude-conv unread                  # what's new since you last `read` it
+claude-conv find "vault-update"     # find a thread by name (its derived title)
+claude-conv fork "zama" --yes       # continue a past thread interactively, as a new one
+claude-conv send "zama" "..." --yes # send a message into a thread headlessly, print the reply
+claude-conv unread                  # what's new since you last viewed it
 ```
 
 Claude Code writes every session to
 `~/.claude/projects/<cwd-encoded>/<session-uuid>.jsonl` — one JSON-lines file
 per session, in (roughly) the Anthropic Messages API shape. Same shape as
 Slack, one level up: a **project** (the directory you ran `claude` in) is a
-channel, and a **session** is a thread — an anchor message (its first turn)
-plus everything tied to it. `read` mirrors Slack's `read`/`--expand-thread`/
-`thread` exactly: bare, it's the channel's top-level view (every session's
-anchor, no content); `--expand` inlines every session's full content;
-`--session`/`--nth` reads one specific session in full. Unlike Slack there's
-no "loose message outside any thread" — every turn belongs to some session,
-so a project has nothing to show beyond its sessions.
+**channel**, and a **session IS a thread** — an anchor message (its first
+turn) plus every turn tied to it. The command set mirrors Slack's exactly:
+
+| Slack | claude-conv-cli |
+|---|---|
+| `channels` | `chats` |
+| `read <channel>` (flat) | bare `read <query>` (every thread's anchor) |
+| `read <channel> --expand-thread` | `read <query> --expand` |
+| `thread <channel> <ts>` | `thread <query>` (`--session`/`--nth` instead of a `ts`) |
+| `search <query>` | `search <text>` |
+
+Unlike Slack, there's no "loose message outside any thread" — every turn
+belongs to some session, so a project has nothing to show beyond its
+threads.
 
 ## Prerequisites
 
@@ -78,25 +85,24 @@ ln -s "$(pwd)" ~/.claude/skills/claude-conv-cli
 ## Usage
 
 ```bash
-claude-conv chats                        # projects, most recently active first
+claude-conv chats                        # projects/channels, most recently active first
 claude-conv chats --limit 100 --json     # everything, machine-readable
-claude-conv sessions zama                # list every session's anchor (= bare `read zama`)
-claude-conv sessions zama --match 2      # disambiguate when multiple projects match
-claude-conv read zama                    # same list, via `read`'s default (list) mode
-claude-conv read zama --expand           # every session in that project, in full
-claude-conv read zama --expand --limit 5 # cap to the 5 most recent sessions, in full
-claude-conv read zama --nth 1            # ONE session in full — 1 = most recent
-claude-conv read zama --nth 2            # the session before the most recent one
-claude-conv read zama --session 573496f4 # an exact session, by UUID prefix, in full
-claude-conv read zama --session 573496f4 --limit 20  # only its last 20 turns
-claude-conv read zama --raw              # (any mode) include thinking + tool call/result blocks
+claude-conv read zama                    # every thread's anchor in "zama" — title, turns, timestamp
+claude-conv read zama --match 2          # disambiguate when multiple projects match
+claude-conv read zama --expand           # every thread in that project, in full
+claude-conv read zama --expand --limit 5 # cap to the 5 most recent threads, in full
+claude-conv thread zama                  # ONE thread in full — most recently active by default
+claude-conv thread zama --nth 2          # the thread before the most recent one
+claude-conv thread zama --session 573496f4  # an exact thread, by session-UUID prefix
+claude-conv thread zama --limit 20       # only its last 20 turns
+claude-conv thread zama --raw            # include thinking + tool call/result blocks
 claude-conv search "vault-update"        # full-text search across every project
 claude-conv search "vault-update" --project zama  # scoped to one project
-claude-conv find "vault-update"          # find a session by its derived title (name)
-claude-conv fork zama                    # dry-run: shows the session + command it'd launch
-claude-conv fork zama --session 573496f4 --yes  # actually fork that session
+claude-conv find "vault-update"          # find a thread by its derived title (name)
+claude-conv fork zama                    # dry-run: shows the thread + command it'd launch
+claude-conv fork zama --session 573496f4 --yes  # actually fork that thread
 claude-conv send zama "what's the status of #229?"          # dry-run
-claude-conv send zama "what's the status of #229?" --yes    # appends to that same session
+claude-conv send zama "what's the status of #229?" --yes    # appends to that same thread
 claude-conv send zama "try another approach" --fork --yes   # sends into a NEW branch instead
 claude-conv unread                       # everything unread, across every project
 claude-conv unread --project zama        # scoped to one project
@@ -113,20 +119,20 @@ are the two that write: `fork` hands off to a real interactive `claude
 --resume --fork-session` process (a brand-new session ID via Claude Code's
 own fork mechanism); `send` does the headless equivalent via `claude --print
 --resume`, and — unless `--fork` is passed — genuinely continues the *same*
-session, appending the reply exactly as an interactive resume would. Both
+thread, appending the reply exactly as an interactive resume would. Both
 default to a dry-run, same convention as the personal-messaging CLIs' `send`
 commands.
 
 ## How it works
 
-- **`read` has three modes, mirroring Slack's `read`/`--expand-thread`/
-  `thread` exactly.** Passing `--session` or `--nth` (even `--nth 1`)
-  switches into single-session mode — read one specific session in full,
-  `--limit` capping turns. Without either: list mode by default (every
-  session's anchor, no content — identical to `sessions`), or `--expand`
-  mode (every session's full content, `--limit` now capping *sessions*
-  instead of turns). List mode alone never marks anything read, since no
-  content was actually shown; single-session and `--expand` mode do.
+- **`read`/`thread` split mirrors Slack's `read`/`--expand-thread`/`thread`
+  exactly** — `read` never targets a single thread; bare, it lists every
+  thread's anchor (no content), `--expand` inlines every thread's full
+  content instead (`--limit` then caps threads shown, not turns).
+  `thread <query>` is the dedicated command for reading exactly one thread in
+  full, defaulting to the most recent (`--nth`/`--session` to pick another;
+  `--limit` caps turns there). Bare `read` never marks anything read (no
+  content was shown); `read --expand` and `thread` do.
 - **Project resolution doesn't trust the directory name.** Claude Code encodes
   a project's cwd by turning every `/` and `.` into `-`, which is lossy on its
   own — a literal dash in a folder name is indistinguishable from an encoded
@@ -152,28 +158,28 @@ commands.
   pass `--include-subagents` to include them.
 - **Search is a two-stage filter**: a substring check on raw file bytes before
   any JSON parsing, so a workspace with a lot of history stays fast to search.
-- **No title is stored** — Claude Code doesn't persist a session name (the
+- **No title is stored** — Claude Code doesn't persist a thread name (the
   ephemeral `~/.claude/sessions/<pid>.json` pointer file has one while a
   session is running, but it isn't written into the transcript itself), so
-  `find`/`sessions`/`read` all derive one from the first substantive user
+  `find`/`read`/`thread` all derive one from the first substantive user
   message instead.
 - **`fork` hands off to a real `claude` process** via `os.execvp`, replacing
-  this script entirely so the resumed session gets a proper interactive
-  terminal — it `cd`s to the original session's directory first, then runs
+  this script entirely so the resumed thread gets a proper interactive
+  terminal — it `cd`s to the original thread's directory first, then runs
   `claude --resume <uuid> --fork-session`.
 - **`send` uses `claude --print --resume` instead** (`subprocess.run`, not
   `execvp`, so it can capture the reply and return control to the caller) —
-  no TTY needed. Verified live: forking a session with `--permission-mode
+  no TTY needed. Verified live: forking a thread with `--permission-mode
   plan` and a tool-free prompt returns a reply in a few seconds; the
-  original session's turn count is untouched and a `--fork`'d branch (with
+  original thread's turn count is untouched and a `--fork`'d branch (with
   the reply appended) appears alongside it.
 - **Read/unread is local bookkeeping, not a Claude Code feature.** A small
   state file (`~/.config/claude-conv-cli/read-state.json`, override with
   `$CLAUDE_CONV_STATE_DIR`) maps each session UUID to the file mtime it was
-  last read at; `read` updates it (unless `--no-mark-read`), and a session
-  counts as unread if it's never in that map or its current mtime is newer
-  than the recorded one. Deliberately kept out of `~/.claude` — Claude Code
-  owns that directory and this CLI never writes into it.
+  last read at; `thread`/`read --expand` update it (unless `--no-mark-read`),
+  and a thread counts as unread if it's never in that map or its current
+  mtime is newer than the recorded one. Deliberately kept out of `~/.claude`
+  — Claude Code owns that directory and this CLI never writes into it.
 
 ## Dependencies
 
