@@ -445,6 +445,22 @@ def _resolve_one_session(
     return _pick_session_from_files(_session_files(project), session_uuid, nth)
 
 
+def _print_thread_rows(results: list[dict], show_cwd: bool, show_unread_mark: bool) -> None:
+    """One column-aligned line per thread — shared by every list-style
+    command (`read`, `unread`, `find`) so their output lines up the same way
+    regardless of how varied the turn counts or cwd lengths in this batch are."""
+    if not results:
+        return
+    turns_width = max(len(str(s["turns"])) for s in results)
+    cwd_width = max(len(s["cwd"]) for s in results) if show_cwd else 0
+    for s in results:
+        last = s["end"] or s["start"]
+        mark = ("● " if s.get("unread") else "  ") if show_unread_mark else ""
+        turns = f"{s['turns']:>{turns_width}} turns"
+        cwd = f"{s['cwd']:<{cwd_width}}  " if show_cwd else ""
+        click.echo(f"{mark}{_local_ts(last)}  {cwd}[{s['uuid'][:8]}]  ({turns})  {s['title']}")
+
+
 def _print_session_list(project: Path, files: list[Path], as_json: bool) -> None:
     """The channel's top-level view: one line per thread (its anchor), no
     content — bare `read`'s output."""
@@ -455,10 +471,7 @@ def _print_session_list(project: Path, files: list[Path], as_json: bool) -> None
         return
     cwd = out[0]["cwd"] if out else project.name
     click.echo(f"# {cwd} — {len(out)} thread(s), most recently active first\n")
-    for s in out:
-        last = s["end"] or s["start"]
-        mark = "● " if s["unread"] else "  "
-        click.echo(f"{mark}{_local_ts(last)}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
+    _print_thread_rows(out, show_cwd=False, show_unread_mark=True)
 
 
 def _rendered_session_turns(path: Path, raw: bool, include_subagents: bool, limit: int) -> list[dict]:
@@ -702,9 +715,7 @@ def unread(project_query: str | None, limit: int, mark_all_read: bool, as_json: 
     if not results:
         click.echo("Nothing unread.")
         return
-    for s in results:
-        last = s["end"] or s["start"]
-        click.echo(f"{_local_ts(last)}  {s['cwd']}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
+    _print_thread_rows(results, show_cwd=True, show_unread_mark=False)
 
 
 @cli.command()
@@ -742,9 +753,7 @@ def find(text: str, limit: int, as_json: bool) -> None:
     if as_json:
         click.echo(json.dumps(results, ensure_ascii=False))
         return
-    for s in results:
-        last = s["end"] or s["start"]
-        click.echo(f"{_local_ts(last)}  {s['cwd']}  [{s['uuid'][:8]}]  ({s['turns']} turns)  {s['title']}")
+    _print_thread_rows(results, show_cwd=True, show_unread_mark=False)
 
 
 @cli.command()
