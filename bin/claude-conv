@@ -318,6 +318,15 @@ def _resolve_one_project(query: str, match: int) -> Path:
     if not candidates:
         raise click.ClickException(f"No project matches {query!r}.")
     if len(candidates) > 1 and not match:
+        # A query like "zama" substring-matches every nested project under it
+        # (worktrees, subpackages, ...) as well as the project itself. If
+        # exactly one candidate's own directory is *named* the query (its
+        # cwd's last path component, case-insensitive), that's unambiguously
+        # "the" project the user meant — auto-pick it instead of forcing
+        # --match every time an outer project has children that also match.
+        exact = [d for d in candidates if Path(_project_cwd(d)).name.lower() == query.lower()]
+        if len(exact) == 1:
+            return exact[0]
         click.echo(f"Multiple projects match {query!r} — pick with --match N:", err=True)
         for i, d in enumerate(candidates[:20], 1):
             summary = _project_summary(d)
