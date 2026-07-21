@@ -63,6 +63,7 @@ CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claud
 PROJECTS_DIR = CLAUDE_HOME / "projects"
 
 _SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+_TASK_NOTIFICATION_RE = re.compile(r"<task-notification>.*?</task-notification>", re.DOTALL)
 _COMMAND_WRAPPER_RE = re.compile(
     r"<command-message>.*?</command-message>\s*<command-name>(.*?)</command-name>",
     re.DOTALL,
@@ -193,6 +194,7 @@ def _project_cwd(project_dir: Path) -> str:
 def _clean_text(text: str) -> str:
     """Strip noise not meaningful to a human reader of the transcript."""
     text = _SYSTEM_REMINDER_RE.sub("", text)
+    text = _TASK_NOTIFICATION_RE.sub("", text)
     text = _COMMAND_WRAPPER_RE.sub(lambda m: m.group(1), text)
     return text.strip()
 
@@ -221,10 +223,13 @@ def _tool_result_summary(block: dict) -> str:
 
 
 def _render_turn(turn: Turn, raw: bool) -> str | None:
-    """One display line (or None if nothing worth showing, e.g. a bare tool
-    round-trip hidden in compact mode)."""
+    """One display line (or None if nothing worth showing).
+
+    In compact mode (raw=False) a turn that was pure tool-calling / a bare
+    tool_result round-trip carries no prose at all — it's dropped entirely
+    rather than shown as a placeholder.
+    """
     parts: list[str] = []
-    tool_calls: list[str] = []
     for block in turn.blocks:
         bt = block.get("type")
         if bt == "text":
@@ -235,18 +240,46 @@ def _render_turn(turn: Turn, raw: bool) -> str | None:
             thinking = block.get("thinking", "").strip()
             if thinking:
                 parts.append(f"[thinking] {thinking}")
-        elif bt == "tool_use":
-            if raw:
-                parts.append(_tool_summary(block))
-            else:
-                tool_calls.append(block.get("name", "?"))
+        elif bt == "tool_use" and raw:
+            parts.append(_tool_summary(block))
         elif bt == "tool_result" and raw:
             parts.append(_tool_result_summary(block))
-    if not parts and tool_calls:
-        parts.append(f"(used tool: {', '.join(tool_calls)} — use --raw for details)")
     if not parts:
         return None
     return "\n".join(parts)
+
+
+def _drop_tool_injected_followups(turns: list[Turn]) -> list[Turn]:
+    """Drop a "user" turn that is really injected content, not human input.
+
+    Some tools (Skill is the main one) reply with a short `tool_result` ack
+    *and then a separate, later `user` turn* carrying the tool's actual
+    payload as plain text (e.g. a whole SKILL.md body) — genuine API replies
+    from a tool always live inside the `tool_result` block itself, so a
+    second, bare-text `user` turn immediately after one, with no assistant
+    turn in between, is never something a human typed. Only applies in
+    compact mode; --raw keeps everything.
+    """
+    filtered: list[Turn] = []
+    last_tool_names: set[str] = set()
+    prev_role: str | None = None
+    for t in turns:
+        is_synthetic_followup = (
+            t.role == "user"
+            and prev_role == "user"
+            and "Skill" in last_tool_names
+            and all(b.get("type") == "text" for b in t.blocks)
+        )
+        if is_synthetic_followup:
+            prev_role = t.role
+            continue
+        if t.role == "assistant":
+            last_tool_names = {
+                b.get("name") for b in t.blocks if b.get("type") == "tool_use"
+            }
+        filtered.append(t)
+        prev_role = t.role
+    return filtered
 
 
 def _local_ts(iso_ts: str) -> str:
@@ -430,6 +463,8 @@ def read(
     path = _resolve_one_session(query, match, nth, session_uuid)
 
     turns = list(_iter_turns(path, include_subagents=include_subagents))
+    if not raw:
+        turns = _drop_tool_injected_followups(turns)
     if limit:
         turns = turns[-limit:]
 

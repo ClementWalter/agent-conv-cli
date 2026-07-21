@@ -79,11 +79,16 @@ bin/claude-conv read zama --limit 20         # only the last 20 turns
 bin/claude-conv read zama --raw              # include thinking + tool_use/tool_result blocks
 ```
 
-Compact mode (default) shows only assistant prose and user text, stripped of
-`<system-reminder>` noise, with slash-command wrappers collapsed to `/name`;
-a turn that was pure tool-calling collapses to `(used tool: X, Y — use --raw
-for details)`. Subagent/sidechain forks are excluded unless
-`--include-subagents` is passed.
+Compact mode (default) shows only genuine assistant prose and user text.
+Stripped entirely: `<system-reminder>` and `<task-notification>` blocks,
+slash-command wrappers (collapsed to `/name`), turns that were pure
+tool-calling (no placeholder shown — just dropped), and a "user" turn that's
+really a tool's injected payload rather than human input (Skill replies with
+a short `tool_result` ack and then a *separate* follow-up `user` turn
+carrying the full SKILL.md body as plain text — that follow-up is dropped
+too). Subagent/sidechain forks are excluded unless `--include-subagents` is
+passed. `--raw` disables all of this and shows everything, including thinking
+and full tool_use/tool_result detail.
 
 ### `claude-conv search <text> [--project QUERY] [--limit N] [--json]`
 

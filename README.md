@@ -116,10 +116,16 @@ commands.
   the whole session under the worktree's encoded name — naively trusting a
   session's first `cwd` would collapse several distinct worktree projects
   onto the same (wrong) parent-repo path.
-- **Compact rendering by default.** Only user/assistant text is shown;
-  `<system-reminder>` blocks are stripped, slash-command wrappers collapse to
-  `/name`, and a turn that was pure tool-calling shows as a one-line summary.
-  Pass `--raw` for thinking blocks and full tool-call/tool-result detail.
+- **Compact rendering by default.** Only genuine user/assistant text is
+  shown: `<system-reminder>` and `<task-notification>` blocks are stripped,
+  slash-command wrappers collapse to `/name`, and a turn that was pure
+  tool-calling is dropped entirely (no placeholder). A "user" turn that's
+  really a tool's injected payload rather than human input is dropped too —
+  Skill replies with a short `tool_result` ack and then a *separate*
+  follow-up `user` turn carrying the full `SKILL.md` body as plain text,
+  which otherwise reads as a wall of unrelated instructions in the middle of
+  the conversation. Pass `--raw` to disable all of this and see everything,
+  including thinking blocks and full tool-call/tool-result detail.
 - **Subagent forks are excluded by default** (`isSidechain: true` events) —
   pass `--include-subagents` to include them.
 - **Search is a two-stage filter**: a substring check on raw file bytes before
