@@ -215,6 +215,20 @@ commands.
   history.
 - **No title is stored**, except by Cursor. `find`/`read`/`thread` derive one
   for Claude Code/Codex threads from the first substantive user message.
+- **Token counts are input + output only, deliberately excluding cache
+  reads/writes.** Every thread listing and `thread`/`read --expand` header
+  shows a token total (`chats`/JSON output include the raw field too). With
+  prompt caching, a long session's later turns each re-read nearly its whole,
+  ever-growing context — summing cache fields across turns scales with
+  turns × context-size and balloons into the hundreds of millions for long
+  sessions (verified: 552M cache-read tokens on one 1193-turn Claude Code
+  session, dominated entirely by repeated cache reads). Input + output alone
+  tracks how much was actually exchanged instead. Same logic applies to
+  Codex: its own `total_token_usage` field has the identical cumulative-cache
+  problem, so this sums each call's *new* tokens
+  (`last_token_usage.input_tokens - cached_input_tokens + output_tokens`)
+  across every `token_count` event instead. Cursor has no cache concept in
+  its per-bubble `tokenCount`, so its input+output sum needs no adjustment.
 - **`fork` hands off to a real `claude` process** via `os.execvp`, replacing
   this script entirely so the resumed thread gets a proper interactive
   terminal — it `cd`s to the original thread's directory first, then runs

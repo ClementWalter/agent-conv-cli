@@ -315,3 +315,14 @@ investigated the actual repo, with no interference to the source thread.
   together — no `--match` needed for the common case. Genuinely ambiguous
   queries still print a numbered `[source] cwd (N threads)` list.
 - Every command supports `--json` for structured output.
+- **Token counts (`chats`/`read`/`thread` and their `--json`) are input +
+  output only** — cache reads/writes are deliberately excluded. Prompt
+  caching means a long session's later turns each re-read nearly its whole,
+  ever-growing context, so summing cache fields across turns scales with
+  turns × context-size (verified: 552M cache-read tokens on one 1193-turn
+  Claude Code session — pure caching artifact, not real content). Codex's
+  own `total_token_usage` has the identical problem, so its total is built
+  by summing each call's *new* tokens instead
+  (`last_token_usage.input_tokens - cached_input_tokens + output_tokens`)
+  rather than trusting that cumulative field. No pricing/cost is computed —
+  raw token counts only.

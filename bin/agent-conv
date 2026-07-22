@@ -219,6 +219,33 @@ def _iter_turns(path: Path, include_subagents: bool = False):
             yield Turn(ts=event.get("timestamp", ""), role=role, blocks=blocks)
 
 
+def _claude_session_tokens(path: Path) -> int | None:
+    """Input + output tokens summed across this session's assistant turns
+    (including subagents — real usage incurred regardless of how it's
+    rendered). Deliberately excludes `cache_read`/`cache_creation`: with
+    prompt caching, a long session's later turns each re-read nearly its
+    whole (ever-growing) context from cache, so summing cache fields across
+    turns scales with turns × context-size and balloons into the hundreds of
+    millions for long sessions — not a meaningful measure of how much was
+    actually exchanged. input/output alone tracks that instead."""
+    total = 0
+    found = False
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "assistant":
+                continue
+            usage = (event.get("message") or {}).get("usage")
+            if not usage:
+                continue
+            found = True
+            total += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+    return total if found else None
+
+
 def _session_cwd(path: Path) -> str | None:
     """The working directory this session *started* in (its first recorded
     `cwd`). A single session can `cd` around afterwards — later events carry
@@ -426,6 +453,16 @@ def _local_ts(iso_ts: str) -> str:
     return dt.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def _format_tokens(n: int | None) -> str:
+    if n is None:
+        return "?"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
 def _session_title(path: Path, max_len: int = 100) -> str:
     """First substantive thing the user said, as a stand-in for a chat title —
     Claude Code doesn't store one."""
@@ -587,6 +624,43 @@ def _codex_drop_noise(turns: list[Turn]) -> list[Turn]:
                 continue
         out.append(t)
     return out
+
+
+def _codex_session_tokens(path: Path) -> int | None:
+    """Sum each API call's *new* tokens (`last_token_usage.input_tokens -
+    cached_input_tokens + output_tokens`) across every `token_count` event.
+
+    `total_token_usage` looks tempting (it's a ready-made running total) but
+    it has the same problem as Claude Code's cache fields: each call resends
+    nearly the whole growing conversation, and `total_token_usage.input_tokens`
+    is a cumulative sum of those ever-growing per-call inputs — it balloons
+    into the tens of millions for long sessions (verified: 22M on a 292-turn
+    session, dominated by `cached_input_tokens`). Summing each call's non-cached
+    input + output instead tracks genuinely new content, consistent with how
+    Claude Code's total is computed."""
+    total = 0
+    found = False
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "event_msg":
+                continue
+            payload = event.get("payload") or {}
+            if payload.get("type") != "token_count":
+                continue
+            usage = (payload.get("info") or {}).get("last_token_usage")
+            if not usage:
+                continue
+            found = True
+            total += (
+                usage.get("input_tokens", 0)
+                - usage.get("cached_input_tokens", 0)
+                + usage.get("output_tokens", 0)
+            )
+    return total if found else None
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +833,48 @@ def _cursor_iter_turns(composer_id: str) -> list[Turn]:
         conn.close()
 
 
+def _cursor_session_tokens(composer_id: str) -> int | None:
+    """Sum each bubble's `tokenCount.{inputTokens,outputTokens}` across the
+    composer — Cursor tracks this per-bubble rather than as a running total."""
+    conn = _cursor_connect()
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT value FROM cursorDiskKV WHERE key = ?", (f"composerData:{composer_id}",)
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            data = json.loads(row[0])
+        except json.JSONDecodeError:
+            return None
+        total = 0
+        found = False
+        for bh in data.get("fullConversationHeadersOnly") or []:
+            bubble_id = bh.get("bubbleId")
+            if not bubble_id:
+                continue
+            brow = conn.execute(
+                "SELECT value FROM cursorDiskKV WHERE key = ?",
+                (f"bubbleId:{composer_id}:{bubble_id}",),
+            ).fetchone()
+            if not brow:
+                continue
+            try:
+                bubble = json.loads(brow[0])
+            except json.JSONDecodeError:
+                continue
+            token_count = bubble.get("tokenCount")
+            if not token_count:
+                continue
+            found = True
+            total += token_count.get("inputTokens", 0) + token_count.get("outputTokens", 0)
+        return total if found else None
+    finally:
+        conn.close()
+
+
 def _cursor_composer_ids_matching(needle: str) -> set[str] | None:
     """SQL-level prefilter across every bubble's text in one query (there's
     no cheap single-file byte-check available the way there is for
@@ -815,6 +931,16 @@ def _handle_iter_turns(handle: SessionHandle, include_subagents: bool) -> list[T
     if handle.source == "cursor":
         return _cursor_iter_turns(handle.composer_id)
     return []
+
+
+def _handle_token_total(handle: SessionHandle) -> int | None:
+    if handle.source == "claude":
+        return _claude_session_tokens(handle.path)
+    if handle.source == "codex":
+        return _codex_session_tokens(handle.path)
+    if handle.source == "cursor":
+        return _cursor_session_tokens(handle.composer_id)
+    return None
 
 
 def _handle_drop_noise(handle: SessionHandle, turns: list[Turn]) -> list[Turn]:
@@ -884,6 +1010,7 @@ def _handle_summary(handle: SessionHandle, read_state: dict) -> dict:
         "start": turns[0].ts if turns else "",
         "end": turns[-1].ts if turns else "",
         "turns": len(turns),
+        "tokens": _handle_token_total(handle),
         "title": _handle_title(handle),
         "unread": _handle_is_unread(handle, read_state),
     }
@@ -1081,15 +1208,17 @@ def _print_thread_rows(
     if not results:
         return
     turns_width = max(len(str(s["turns"])) for s in results)
+    tokens_width = max(len(_format_tokens(s.get("tokens"))) for s in results)
     cwd_width = max(len(s["cwd"]) for s in results) if show_cwd else 0
     source_width = max(len(s["source"]) for s in results) if show_source else 0
     for s in results:
         last = s["end"] or s["start"]
         mark = ("● " if s.get("unread") else "  ") if show_unread_mark else ""
         turns = f"{s['turns']:>{turns_width}} turns"
+        tokens = f"{_format_tokens(s.get('tokens')):>{tokens_width}} tok"
         cwd = f"{s['cwd']:<{cwd_width}}  " if show_cwd else ""
         source = f"[{s['source']:<{source_width}}]  " if show_source else ""
-        click.echo(f"{mark}{_local_ts(last)}  {source}{cwd}[{s['uuid'][:8]}]  ({turns})  {s['title']}")
+        click.echo(f"{mark}{_local_ts(last)}  {source}{cwd}[{s['uuid'][:8]}]  ({turns}, {tokens})  {s['title']}")
 
 
 def _print_handle_list(cwd_label: str, handles: list[SessionHandle], as_json: bool, show_source: bool) -> None:
@@ -1198,6 +1327,7 @@ def read(
             "session": h.uuid,
             "cwd": h.project_cwd,
             "title": _handle_title(h),
+            "tokens": _handle_token_total(h),
             "turns": turns,
         })
     if not no_mark_read:
@@ -1207,7 +1337,7 @@ def read(
         click.echo(json.dumps(threads_out, ensure_ascii=False))
         return
     for t in threads_out:
-        click.echo(f"## [{t['source']}] thread {t['session']} — {t['title']} — {len(t['turns'])} turns\n")
+        click.echo(f"## [{t['source']}] thread {t['session']} — {t['title']} — {len(t['turns'])} turns, {_format_tokens(t['tokens'])} tok\n")
         for m in t["turns"]:
             click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
 
@@ -1252,6 +1382,7 @@ def thread(
     handle = _pick_session_handle(sessions, session_uuid, nth)
     out = _handle_rendered_turns(handle, raw, include_subagents, limit)
     title = _handle_title(handle)
+    tokens = _handle_token_total(handle)
 
     if not no_mark_read:
         state = _load_read_state()
@@ -1260,11 +1391,11 @@ def thread(
 
     if as_json:
         click.echo(json.dumps(
-            {"source": handle.source, "session": handle.uuid, "cwd": handle.project_cwd, "title": title, "turns": out},
+            {"source": handle.source, "session": handle.uuid, "cwd": handle.project_cwd, "title": title, "tokens": tokens, "turns": out},
             ensure_ascii=False,
         ))
         return
-    click.echo(f"# [{handle.source}] {handle.project_cwd} — thread {handle.uuid} — {title} — {len(out)} turns\n")
+    click.echo(f"# [{handle.source}] {handle.project_cwd} — thread {handle.uuid} — {title} — {len(out)} turns, {_format_tokens(tokens)} tok\n")
     for m in out:
         click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
 
