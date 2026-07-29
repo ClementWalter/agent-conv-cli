@@ -88,6 +88,13 @@ from pathlib import Path
 
 import click
 
+if sys.platform == "win32":
+    # Windows consoles default to a legacy codepage (cp1252); transcripts are
+    # UTF-8, so accented text otherwise mojibakes or raises UnicodeEncodeError.
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+
 logging.basicConfig(
     level=logging.WARNING, format="%(levelname)s: %(message)s", stream=sys.stderr
 )
@@ -725,6 +732,9 @@ def _cursor_iter_composer_headers():
         rows = conn.execute(
             "SELECT composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, value FROM composerHeaders"
         ).fetchall()
+    except sqlite3.OperationalError:
+        # Older/partial Cursor installs have a state.vscdb without this table.
+        return
     finally:
         conn.close()
     for r in rows:
