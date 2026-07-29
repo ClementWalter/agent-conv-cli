@@ -2,7 +2,7 @@
 name: agent-conv-cli
 description:
   "Read your own local Claude Code / Codex CLI / Cursor conversation history
-  from the terminal via the bundled `bin/agent-conv` command — one unified
+  from the terminal via the bundled `agent-conv` command — one unified
   reader across all three. Same shape as Slack, one level up: a project is a
   channel, a session IS a thread. `agent-conv chats` lists projects/channels
   across every source, most recently active first, tagged. `agent-conv read
@@ -54,9 +54,21 @@ rendering, cleaning, and search all work identically regardless of source.
 
 ## How to invoke
 
-Run the bundled launcher **`bin/agent-conv`** (PEP 723 — `uv` resolves deps
-inline on first run). Resolve `bin/agent-conv` against this skill's
-directory; from elsewhere use the absolute path.
+Invoke it as **`agent-conv`** — on `$PATH` via a symlink in `~/.local/bin` onto this
+repo's `bin/agent-conv`, so it always runs the current checkout: a `git pull`, or even
+an uncommitted edit, takes effect immediately with nothing to reinstall.
+
+```bash
+agent-conv chats
+```
+
+Examples in this doc are written that way. If `agent-conv` is not on `$PATH`, run the
+bundled launcher `bin/agent-conv` resolved against this skill's own directory (PEP 723
+— `uv` resolves deps inline on first run), or link it once:
+
+```bash
+ln -sfn <skill-dir>/bin/agent-conv ~/.local/bin/agent-conv
+```
 
 ## Mental model
 
@@ -117,11 +129,11 @@ for that). Searches all three sources at once unless `--source` narrows it;
 an exact directory-name match merges every source's threads for it:
 
 ```bash
-bin/agent-conv read myproject                     # every thread's anchor, across all sources for that project
-bin/agent-conv read myproject --source cursor     # same, but only Cursor's threads
-bin/agent-conv read myproject --expand            # every thread's FULL content, one after another
-bin/agent-conv read myproject --expand --limit 5  # cap to the 5 most recent threads in expand mode
-bin/agent-conv read myproject --raw               # (with --expand) include thinking + tool_use/tool_result
+agent-conv read myproject                     # every thread's anchor, across all sources for that project
+agent-conv read myproject --source cursor     # same, but only Cursor's threads
+agent-conv read myproject --expand            # every thread's FULL content, one after another
+agent-conv read myproject --expand --limit 5  # cap to the 5 most recent threads in expand mode
+agent-conv read myproject --raw               # (with --expand) include thinking + tool_use/tool_result
 ```
 
 Bare, `--limit` caps how many threads are *listed*; with `--expand`, `--limit`
@@ -138,12 +150,12 @@ merges threads from multiple sources, `--nth` ranks across all of them by
 recency together:
 
 ```bash
-bin/agent-conv thread myproject                    # most recently active thread, any source, in full
-bin/agent-conv thread myproject --source codex     # most recent Codex thread specifically
-bin/agent-conv thread myproject --nth 2            # the thread before that
-bin/agent-conv thread myproject --session a1b2c3d4 # an exact thread (session UUID / composerId prefix)
-bin/agent-conv thread myproject --limit 20         # only its last 20 turns
-bin/agent-conv thread myproject --raw              # include thinking + tool_use/tool_result blocks
+agent-conv thread myproject                    # most recently active thread, any source, in full
+agent-conv thread myproject --source codex     # most recent Codex thread specifically
+agent-conv thread myproject --nth 2            # the thread before that
+agent-conv thread myproject --session a1b2c3d4 # an exact thread (session UUID / composerId prefix)
+agent-conv thread myproject --limit 20         # only its last 20 turns
+agent-conv thread myproject --raw              # include thinking + tool_use/tool_result blocks
 ```
 
 Compact mode (default) shows only genuine assistant prose and user text.
@@ -199,10 +211,10 @@ unread state natively** — that flag is read directly and never written to;
 its own flag).
 
 ```bash
-bin/agent-conv unread                        # everything unread, across every project and source
-bin/agent-conv unread --project myproject    # scoped to one project
-bin/agent-conv unread --source claude        # scoped to one backend
-bin/agent-conv unread --mark-all-read        # catch up in bulk instead of listing (claude/codex only)
+agent-conv unread                        # everything unread, across every project and source
+agent-conv unread --project myproject    # scoped to one project
+agent-conv unread --source claude        # scoped to one backend
+agent-conv unread --mark-all-read        # catch up in bulk instead of listing (claude/codex only)
 ```
 
 The first run will likely show your whole Claude Code/Codex history as
@@ -223,8 +235,8 @@ the current process and hands the terminal off to a real, writable
 interactive `claude` session — run it from an actual terminal, not scripted).
 
 ```bash
-bin/agent-conv fork myproject                     # dry-run: shows what would launch
-bin/agent-conv fork myproject --session a1b2c3d4 --yes  # actually fork that thread
+agent-conv fork myproject                     # dry-run: shows what would launch
+agent-conv fork myproject --session a1b2c3d4 --yes  # actually fork that thread
 ```
 
 ### `agent-conv send <query> <message> [--nth N] [--session UUID] [--match N] [--fork] [--permission-mode MODE] [--timeout SECS] [--yes] [--json]`
@@ -238,9 +250,9 @@ typed the message yourself; pass `--fork` to branch into a new thread instead
 reply captured immediately rather than opening a terminal).
 
 ```bash
-bin/agent-conv send myproject "what's the status of #123?"           # dry-run
-bin/agent-conv send myproject "what's the status of #123?" --yes     # actually sends, appends to that thread
-bin/agent-conv send myproject "try a different approach" --fork --yes  # sends into a NEW branch instead
+agent-conv send myproject "what's the status of #123?"           # dry-run
+agent-conv send myproject "what's the status of #123?" --yes     # actually sends, appends to that thread
+agent-conv send myproject "try a different approach" --fork --yes  # sends into a NEW branch instead
 ```
 
 This is a real write action: the resumed thread may run tools (edit files,
@@ -270,10 +282,10 @@ purely an editor launcher — open files, diff, goto-line; no chat/composer
 flags exist).
 
 ```bash
-bin/agent-conv port myproject --source cursor --into claude          # interactive: cursor thread -> new claude session
-bin/agent-conv port myproject --source codex --into claude --print   # headless: codex thread -> claude --print, capture reply
-bin/agent-conv port myproject --source claude --into codex           # claude thread -> new interactive codex session
-bin/agent-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
+agent-conv port myproject --source cursor --into claude          # interactive: cursor thread -> new claude session
+agent-conv port myproject --source codex --into claude --print   # headless: codex thread -> claude --print, capture reply
+agent-conv port myproject --source claude --into codex           # claude thread -> new interactive codex session
+agent-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
 ```
 
 Defaults to a dry-run (same convention as `fork`/`send`) that prints the
