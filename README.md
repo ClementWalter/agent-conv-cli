@@ -77,7 +77,7 @@ The `npx skills` install path additionally requires Node.js (for `npx`).
 ## Install
 
 **A — Bundled launcher.** No install step. Clone the repo and invoke
-`bin/agent-conv` directly; the `#!/usr/bin/env -S uv run --script` shebang and
+`agent-conv` directly; the `#!/usr/bin/env -S uv run --script` shebang and
 [PEP 723](https://peps.python.org/pep-0723/) inline metadata make `uv` pull
 deps on the first run.
 
@@ -88,7 +88,7 @@ cd agent-conv-cli
 ```
 
 **B — As an agent skill.** The repo ships a `SKILL.md` and the self-contained
-`bin/agent-conv` launcher at the project root, in the
+`agent-conv` launcher at the project root, in the
 [Vercel Labs `skills`](https://github.com/vercel-labs/skills) format:
 
 ```bash
@@ -98,7 +98,7 @@ npx skills add <owner>/agent-conv-cli
 This drops the skill under `~/.agents/skills/agent-conv-cli/` and symlinks it
 into every supported agent runtime installed on your machine (Claude Code,
 Cursor, Windsurf, Codex, Gemini CLI, …). Agents then drive the CLI by invoking
-the bundled `bin/agent-conv` script directly.
+the bundled `agent-conv` script directly.
 
 To install locally for development instead, symlink the checkout so the skill
 picks up live edits:
@@ -263,7 +263,7 @@ commands.
 
 ## Dependencies
 
-Declared inline via PEP 723 in `bin/agent-conv`:
+Declared inline via PEP 723 in `agent-conv`:
 
 - `click` — CLI framework
 
