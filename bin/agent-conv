@@ -1563,6 +1563,108 @@ def find(text: str, source_filter: str | None, limit: int, as_json: bool) -> Non
     _print_thread_rows(results, show_cwd=True, show_unread_mark=False, show_source=True)
 
 
+_SKILL_TOOL_USE_NEEDLE = b'"name":"Skill"'
+
+
+def _parse_iso_ts(ts: str) -> float | None:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+@cli.command("skill-usage")
+@click.option(
+    "--since-days",
+    default=0,
+    help="Only scan sessions modified in the last N days (0 = all history).",
+)
+@click.option(
+    "--recent",
+    default=5,
+    help="Per skill, how many of its most recent invocations to keep session pointers for (0 = none).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def skill_usage(since_days: int, recent: int, as_json: bool) -> None:
+    """Tally Skill-tool invocations across every Claude Code session.
+
+    Claude Code records an explicit `Skill` tool_use event (with the invoked
+    skill's name in `input.skill`) in the main transcript every time a skill
+    is loaded — even when the skill's own work then runs in a background
+    subagent, so subagent/sidechain turns don't need to be scanned. This
+    walks every project's session files, cheaply pre-filtering each one with
+    a raw-bytes substring check before doing any JSON parsing (same trick
+    `search`/`find` use) so a full scan of years of history stays fast, and
+    reports each distinct skill name invoked: how many times total, and (in
+    `--json`) a `recent` list of its last N invocations' `session`/`cwd`/`ts`
+    pointers — enough to `agent-conv thread <cwd> --session <uuid>` straight
+    into the transcript right after a specific load, to actually judge how
+    the skill got used (one clean action vs. floundering/back-and-forth),
+    not just whether it got used. Text mode only prints the count + most
+    recent timestamp; use `--json` for the drill-down pointers.
+
+    Codex and Cursor have no equivalent "Skill" tool concept, so this only
+    ever looks at Claude Code history — there is nothing to `--source` this
+    command with.
+
+    This command only reports what has been *used*; it has no notion of
+    which skills are currently installed, so it never decides what's
+    "unused" — that comparison (against the skill directory's own contents)
+    is left to the caller.
+    """
+    cutoff = datetime.now(timezone.utc).timestamp() - since_days * 86400 if since_days > 0 else None
+
+    invocations: dict[str, list[dict]] = {}
+    for project_dir in _iter_project_dirs():
+        cwd = None
+        for path in _session_files(project_dir):
+            if cutoff is not None and path.stat().st_mtime < cutoff:
+                continue
+            with path.open("rb") as f:
+                data = f.read()
+            if _SKILL_TOOL_USE_NEEDLE not in data:
+                continue
+            if cwd is None:
+                cwd = _project_cwd(project_dir)
+            for turn in _iter_turns(path, include_subagents=False):
+                turn_epoch = _parse_iso_ts(turn.ts)
+                if cutoff is not None and turn_epoch is not None and turn_epoch < cutoff:
+                    continue
+                for block in turn.blocks:
+                    if block.get("type") != "tool_use" or block.get("name") != "Skill":
+                        continue
+                    name = (block.get("input") or {}).get("skill")
+                    if not name:
+                        continue
+                    invocations.setdefault(name, []).append(
+                        {"ts": turn.ts, "session": path.stem, "cwd": cwd}
+                    )
+
+    rows = []
+    for name, invs in invocations.items():
+        invs.sort(key=lambda i: i["ts"], reverse=True)
+        rows.append(
+            {
+                "skill": name,
+                "count": len(invs),
+                "last_used": invs[0]["ts"],
+                "recent": [{"session": i["session"], "cwd": i["cwd"], "ts": i["ts"]} for i in invs[:recent]],
+            }
+        )
+    rows.sort(key=lambda r: r["last_used"], reverse=True)
+
+    if as_json:
+        click.echo(json.dumps(rows, ensure_ascii=False))
+        return
+    if not rows:
+        click.echo("No Skill-tool invocations found.")
+        return
+    for r in rows:
+        click.echo(f"{_local_ts(r['last_used'])}  {r['skill']}  ({r['count']}x)")
+
+
 @cli.command()
 @click.argument("query")
 @click.option("--nth", default=1, help="Which thread to fork, 1 = most recent (default).")

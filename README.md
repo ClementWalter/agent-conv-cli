@@ -14,6 +14,7 @@ agent-conv fork "myproject" --yes        # continue a past Claude Code thread in
 agent-conv send "myproject" "..." --yes  # send a message into a Claude Code thread headlessly, print the reply
 agent-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
 agent-conv unread                        # what's new since you last viewed it
+agent-conv skill-usage                   # every Skill-tool invocation ever, count + last used (Claude Code only)
 ```
 
 Same shape as Slack, one level up: a **project** (the directory an agent ran
@@ -137,12 +138,15 @@ agent-conv unread --mark-all-read                    # catch up in bulk (Claude 
 agent-conv port myproject --source cursor --into claude          # cursor thread's content -> brand-new claude session
 agent-conv port myproject --source codex --into claude --print   # headless, capture the reply
 agent-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
+agent-conv skill-usage                               # every skill invoked, ever: count + last-used timestamp
+agent-conv skill-usage --since-days 30 --json        # only the last 30 days, machine-readable
 ```
 
 `agent-conv --help` lists every subcommand; `agent-conv <cmd> --help` for
 per-command options including `--json`, `--limit`, `--match`, `--nth`,
 `--session`, `--source`, `--expand`, `--raw`, `--include-subagents`, `--fork`,
-`--into`, `--permission-mode`, `--yes`, `--no-mark-read`, `--mark-all-read`.
+`--into`, `--permission-mode`, `--yes`, `--no-mark-read`, `--mark-all-read`,
+`--since-days`.
 
 Every read command supports `--json` for structured output. `fork`, `send`,
 and `port` are the ones that write. `fork`/`send` are **Claude Code only**
@@ -215,6 +219,18 @@ commands.
   history.
 - **No title is stored**, except by Cursor. `find`/`read`/`thread` derive one
   for Claude Code/Codex threads from the first substantive user message.
+- **`skill-usage` reads the `Skill` tool_use event itself**, not skill output —
+  Claude Code always records `{"name": "Skill", "input": {"skill": "<name>"}}`
+  in the main transcript the moment a skill is invoked, even when the skill's
+  actual work then forks into a background subagent, so subagent turns never
+  need scanning. Same cheap raw-bytes pre-filter as `search`/`find` before any
+  JSON parsing keeps a full-history scan fast (a 900MB/2500-session history
+  scans in ~1s). It only reports what got used — never installed skills or
+  what to do about unused ones; that comparison belongs to the caller. In
+  `--json`, each skill also carries a `recent` list of `session`/`cwd`/`ts`
+  pointers (`--recent N` to size it) so a caller can jump straight to
+  `agent-conv thread <cwd> --session <uuid>` right after a given load and
+  judge *how* the skill got used, not just whether it did.
 - **Token counts are input + output only, deliberately excluding cache
   reads/writes.** Every thread listing and `thread`/`read --expand` header
   shows a token total (`chats`/JSON output include the raw field too). With

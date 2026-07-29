@@ -22,7 +22,10 @@ description:
   headlessly and prints the reply, appending to that same thread unless
   `--fork` is passed (dry-run by default). `agent-conv unread` lists threads
   with activity you haven't seen yet (Claude Code/Codex: local bookkeeping;
-  Cursor: its own native unread flag, read directly). No auth, no network —
+  Cursor: its own native unread flag, read directly). `agent-conv skill-usage`
+  tallies every Skill-tool invocation across all Claude Code history — count,
+  last-used timestamp, and (in `--json`) per-invocation session/cwd pointers
+  to drill into how a skill actually got used. No auth, no network —
   it's a local file reader, the counterpart to
   imessage-cli/whatsapp-cli/slack-user-cli for your own coding-agent history.
   Use when the user wants to recall, search, review, or continue a past
@@ -221,6 +224,38 @@ The first run will likely show your whole Claude Code/Codex history as
 unread (nothing has ever been marked read yet) — run `unread --mark-all-read`
 once to start clean, then normal usage keeps it current. `chats` shows a
 per-project unread count and bare `read` prefixes unread rows with `●`.
+
+### `agent-conv skill-usage [--since-days N] [--recent N] [--json]`
+
+**Claude Code only** — Codex and Cursor have no equivalent "Skill" tool
+concept. Tallies every `Skill` tool invocation across every project's
+session history: Claude Code records `{"name": "Skill", "input": {"skill":
+"<name>"}}` in the main transcript the moment a skill is invoked (even when
+the skill's own work then forks into a background subagent), so this never
+needs to scan subagent/sidechain turns. Reports one row per distinct skill
+name actually invoked — count and most recent use, most recently used first:
+
+```bash
+agent-conv skill-usage                     # every skill ever invoked: count + last-used timestamp
+agent-conv skill-usage --since-days 30     # only sessions touched in the last 30 days
+agent-conv skill-usage --json              # machine-readable, includes drill-down pointers
+agent-conv skill-usage --json --recent 10  # keep the last 10 invocations' pointers per skill (default 5)
+```
+
+In `--json`, each row also carries `recent`: its last N invocations'
+`session`/`cwd`/`ts`, enough to jump straight to the transcript right after a
+given load — `agent-conv thread <cwd> --source claude --session <uuid>` (add
+`--match N` if that `cwd` is ambiguous among nested worktrees) — to actually
+judge how the skill got used (one clean action vs. floundering, unclear
+back-and-forth), not just whether it got used at all. Text mode only prints
+the count + most recent timestamp.
+
+`--since-days 0` (the default) scans full history — a cheap raw-bytes
+pre-filter on each session file (same trick `search`/`find` use) before any
+JSON parsing keeps this fast even across years of transcripts. This command
+only reports what got *used*; it has no notion of which skills are currently
+installed, so pair it with a listing of your skills directory to work out
+what's unused — that comparison is left to the caller.
 
 ### `agent-conv fork <query> [--nth N] [--session UUID] [--match N] [--yes]`
 
