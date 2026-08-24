@@ -1,9 +1,9 @@
 ---
 name: agent-conv-cli
 description:
-  "Read your own local Claude Code / Codex CLI / Cursor conversation history
+  "Read your own local Claude Code / Codex CLI / Cursor / Oh My Pi conversation history
   from the terminal via the bundled `agent-conv` command — one unified
-  reader across all three. Same shape as Slack, one level up: a project is a
+  reader across all four. Same shape as Slack, one level up: a project is a
   channel, a session IS a thread. `agent-conv chats` lists projects/channels
   across every source, most recently active first, tagged. `agent-conv read
   <query>` mirrors Slack's `read <channel>`: bare, it lists every thread's
@@ -12,7 +12,7 @@ description:
   one real directory merges every source's threads for it into one list.
   `agent-conv thread <query>` mirrors Slack's `thread <channel> <ts>`: reads
   exactly one thread in full (defaults to the most recent; `--nth`/`--session`
-  to pick another). `--source claude|codex|cursor` scopes any command to one
+  to pick another). `--source claude|codex|cursor|omp` scopes any command to one
   backend. `agent-conv search <text>` full-text-searches across everything;
   `agent-conv find <text>` locates a thread by its derived title (name)
   across every project. `agent-conv fork <query>` hands off to `claude
@@ -21,7 +21,7 @@ description:
   equivalent CLI hook). `agent-conv send <query> <message>` does the same
   headlessly and prints the reply, appending to that same thread unless
   `--fork` is passed (dry-run by default). `agent-conv unread` lists threads
-  with activity you haven't seen yet (Claude Code/Codex: local bookkeeping;
+  with activity you haven't seen yet (Claude Code/Codex/OMP: local bookkeeping;
   Cursor: its own native unread flag, read directly). `agent-conv skill-usage`
   tallies every Skill-tool invocation across all Claude Code history — count,
   last-used timestamp, and (in `--json`) per-invocation session/cwd pointers
@@ -32,9 +32,9 @@ description:
   Claude Code, Codex, or Cursor conversation, thread, or project's history."
 ---
 
-# Claude Code / Codex / Cursor conversation reader CLI
+# Claude Code / Codex / Cursor / Oh My Pi conversation reader CLI
 
-Terminal access to your **own** conversation history across three coding
+Terminal access to your **own** conversation history across four coding
 agents by reading each one's local storage directly, read-only:
 
 - **Claude Code** — `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`, one
@@ -51,6 +51,10 @@ agents by reading each one's local storage directly, read-only:
   (each bubble's text). Opened read-only (`mode=ro`) — no snapshot-copy
   needed (the db is often 1GB+; SQLite's own WAL readers already get a
   consistent view without one).
+- **Oh My Pi** — `~/.omp/agent/sessions/<cwd-encoded>/<timestamp>_<uuid>.jsonl`
+  (override with `$OMP_HOME`). cwd/id/title live on the `session` event;
+  this CLI groups by that recorded cwd. Unread is local bookkeeping, same
+  as Claude Code/Codex.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering, cleaning, and search all work identically regardless of source.
@@ -78,7 +82,7 @@ ln -sfn <skill-dir>/bin/agent-conv ~/.local/bin/agent-conv
 Same shape as Slack, one level up: a **project** (the directory an agent ran
 in) is a **channel**, and a **session** IS a **thread** — an anchor message
 (its first turn) plus every turn tied to it. The command set mirrors Slack's
-exactly, across all three sources at once:
+exactly, across all four sources at once:
 
 | Slack | agent-conv-cli |
 |---|---|
@@ -90,7 +94,7 @@ exactly, across all three sources at once:
 | *(no equivalent)* | `find <text>` — locate a thread by its title across every project |
 | *(no equivalent)* | `fork` / `send` — continue a Claude Code thread, live or headless |
 | *(no equivalent)* | `unread` — read/unread tracking, native for Cursor, local bookkeeping for Claude Code/Codex |
-| *(no equivalent)* | `--source claude\|codex\|cursor` — scope any command to one backend |
+| *(no equivalent)* | `--source claude\|codex\|cursor\|omp` — scope any command to one backend |
 
 Unlike Slack, there's no "loose message outside any thread" case — every turn
 belongs to exactly one session, so a project has nothing to show beyond its
@@ -128,7 +132,7 @@ several rows — one per source that has history there.
 ### `agent-conv read <query> [--source S] [--expand] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
 
 The channel's top-level view — never targets a single thread (use `thread`
-for that). Searches all three sources at once unless `--source` narrows it;
+for that). Searches all four sources at once unless `--source` narrows it;
 an exact directory-name match merges every source's threads for it:
 
 ```bash

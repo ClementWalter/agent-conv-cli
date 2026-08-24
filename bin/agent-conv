@@ -5,7 +5,7 @@
 #     "click==8.3.3",
 # ]
 # ///
-"""Read your own local Claude Code / Codex CLI / Cursor conversation history.
+"""Read your own local Claude Code / Codex CLI / Cursor / Oh My Pi conversation history.
 
 Claude Code writes every session to `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`
 — one JSON-lines file per session, in (roughly) the Anthropic Messages API shape:
@@ -18,9 +18,9 @@ Slack/Telegram readers.
 Same shape as Slack, one level up: a project (the directory you ran an agent
 in) is a channel, and a session IS a thread — an anchor message (its first
 turn) plus every turn tied to it. So the command set mirrors Slack's exactly,
-across all three sources at once:
+across all four sources at once:
 
-* **Three sources, one model.** Claude Code writes
+* **Four sources, one model.** Claude Code writes
   `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl` (Anthropic Messages API
   shape). Codex CLI writes `~/.codex/sessions/<Y>/<m>/<d>/rollout-*.jsonl` +
   `~/.codex/archived_sessions/*.jsonl` (OpenAI Responses-API shape: `message`/
@@ -30,8 +30,11 @@ across all three sources at once:
   `composerHeaders` table (one row per chat, with a *real* stored title and
   unread flag — the only one of the three that has either) and a
   `cursorDiskKV` blob table keyed by `composerData:<id>` (the thread's bubble
-  order) and `bubbleId:<composerId>:<bubbleId>` (each bubble's text). Every
-  backend normalizes into the same `Turn(ts, role, blocks)` shape, so
+  order) and `bubbleId:<composerId>:<bubbleId>` (each bubble's text). Oh My Pi
+  writes `~/.omp/agent/sessions/<cwd-encoded>/<timestamp>_<uuid>.jsonl`
+  (override with `$OMP_HOME`); cwd/id/title live on the `session` event, so
+  this CLI groups by that recorded cwd the way Codex does. Every backend
+  normalizes into the same `Turn(ts, role, blocks)` shape, so
   rendering/cleaning/search all work identically regardless of source.
 * **The directory name is not the source of truth for the project path**
   (Claude Code, and Cursor's workspace hash). Claude Code encodes the cwd by
@@ -49,7 +52,7 @@ across all three sources at once:
   mirrors Slack's `thread <channel> <ts>`: reads exactly one thread in full
   (defaults to the most recent; `--nth`/`--session` to pick another). `search`
   full-text-searches across everything; `find` locates a thread by its
-  derived title (name) across every project. `--source claude|codex|cursor`
+  derived title (name) across every project. `--source claude|codex|cursor|omp`
   scopes any of these to one backend. `fork`/`send` hand off to a real
   `claude --resume [--fork-session]` process to continue a past Claude Code
   thread live or headlessly — Claude-only for now (Codex has an analogous
@@ -57,7 +60,7 @@ across all three sources at once:
   cross-provider: it seeds a **brand-new** session with a different provider
   (`--into claude|codex`) using the source thread's rendered transcript as
   the opening prompt, since no provider can literally resume another's
-  session format — Cursor can only ever be a `--source` for this, never a
+  session format — Cursor and Oh My Pi can only ever be a `--source` for this, never a
   target, as it has no CLI to seed a chat with a prompt at all.
 
 Reading is entirely local and read-only — each tool owns its own files and
@@ -100,7 +103,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("agent-conv")
 
-SOURCES = ("claude", "codex", "cursor")
+SOURCES = ("claude", "codex", "cursor", "omp")
 
 CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
 PROJECTS_DIR = CLAUDE_HOME / "projects"
@@ -121,8 +124,8 @@ CURSOR_WORKSPACE_STORAGE = CURSOR_USER_DIR / "workspaceStorage"
 # This tool's own bookkeeping — deliberately NOT under ~/.claude, since Claude
 # Code owns that directory and this CLI never writes into it. Claude Code and
 # Codex have no concept of read/unread; Cursor does (its own composerHeaders
-# flag, read directly — never written to by this tool). This file only ever
-# tracks Claude Code and Codex threads.
+# flag, read directly — never written to by this tool). This file tracks
+# Claude Code, Codex, and Oh My Pi threads.
 STATE_DIR = Path(os.environ.get("AGENT_CONV_STATE_DIR", str(Path.home() / ".config" / "agent-conv-cli")))
 READ_STATE_FILE = STATE_DIR / "read-state.json"
 
@@ -326,7 +329,7 @@ def _claude_project_sessions(project: ProjectHandle) -> list[SessionHandle]:
 
 
 # ---------------------------------------------------------------------------
-# Rendering (shared by all three backends — every backend normalizes into
+# Rendering (shared by all four backends — every backend normalizes into
 # the same Turn(ts, role, blocks) shape, using the same block vocabulary:
 # {"type": "text"|"thinking"|"tool_use"|"tool_result", ...})
 # ---------------------------------------------------------------------------
@@ -909,6 +912,180 @@ def _cursor_composer_ids_matching(needle: str) -> set[str] | None:
 
 
 # ---------------------------------------------------------------------------
+# Oh My Pi (omp) backend
+#
+# ~/.omp/agent/sessions/<cwd-encoded>/<timestamp>_<uuid>.jsonl — one
+# JSON-lines file per session. Directory names are lossy encodings of the
+# cwd (same idea as Claude Code); the authoritative cwd/id/title live on
+# the `session` event inside the file, so this backend groups by that
+# recorded cwd the way Codex does. Override the home with $OMP_HOME.
+# ---------------------------------------------------------------------------
+
+OMP_HOME = Path(os.environ.get("OMP_HOME", str(Path.home() / ".omp")))
+OMP_SESSIONS_DIR = OMP_HOME / "agent" / "sessions"
+
+_omp_project_cache: dict[str, list[tuple[Path, dict]]] | None = None
+
+
+def _omp_all_session_files() -> list[Path]:
+    if not OMP_SESSIONS_DIR.is_dir():
+        return []
+    return sorted(
+        (p for p in OMP_SESSIONS_DIR.rglob("*.jsonl") if p.is_file()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _omp_session_meta(path: Path) -> dict:
+    """id / cwd / title from the opening `session`/`title`/`title_change` lines."""
+    meta: dict = {"cwd": None, "session_id": None, "title": ""}
+    with path.open(encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            t = event.get("type")
+            if t == "session":
+                meta["cwd"] = event.get("cwd") or meta["cwd"]
+                meta["session_id"] = event.get("id") or meta["session_id"]
+                if event.get("title"):
+                    meta["title"] = event["title"]
+            elif t in ("title", "title_change") and event.get("title"):
+                meta["title"] = event["title"]
+            if i > 40 and meta["cwd"] and meta["session_id"] and meta["title"]:
+                break
+    if not meta["session_id"]:
+        stem = path.stem
+        meta["session_id"] = stem.split("_", 1)[1] if "_" in stem else stem
+    return meta
+
+
+def _omp_projects_map() -> dict[str, list[tuple[Path, dict]]]:
+    global _omp_project_cache
+    if _omp_project_cache is None:
+        by_cwd: dict[str, list[tuple[Path, dict]]] = {}
+        for f in _omp_all_session_files():
+            meta = _omp_session_meta(f)
+            cwd = meta.get("cwd")
+            if cwd:
+                by_cwd.setdefault(cwd, []).append((f, meta))
+        _omp_project_cache = by_cwd
+    return _omp_project_cache
+
+
+def _omp_iter_projects():
+    if not OMP_SESSIONS_DIR.is_dir():
+        return
+    for cwd in _omp_projects_map():
+        yield ProjectHandle(source="omp", cwd=cwd, key=cwd)
+
+
+def _omp_project_sessions(project: ProjectHandle) -> list[SessionHandle]:
+    files = _omp_projects_map().get(project.cwd, [])
+    out = []
+    for f, meta in files:
+        out.append(
+            SessionHandle(
+                source="omp",
+                uuid=meta.get("session_id") or f.stem,
+                project_cwd=project.cwd,
+                path=f,
+                mtime=f.stat().st_mtime,
+                title_hint=meta.get("title") or None,
+            )
+        )
+    return out
+
+
+def _omp_iter_turns(path: Path):
+    """Normalize omp `message` events into Turn/blocks.
+
+    `developer`-role compaction resumes are skipped (same as Codex's
+    permissions preamble). `toolResult` becomes a tool_result block so
+    compact rendering drops it and `--raw` keeps it.
+    """
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "message":
+                continue
+            message = event.get("message") or {}
+            role = message.get("role")
+            ts = event.get("timestamp", "")
+            content = message.get("content") or []
+
+            if role == "developer":
+                continue
+            if role == "toolResult":
+                texts = [
+                    b.get("text", "")
+                    for b in content
+                    if isinstance(b, dict) and b.get("text")
+                ]
+                body = "\n".join(t for t in texts if t) or str(content)
+                yield Turn(
+                    ts=ts,
+                    role="user",
+                    blocks=[{"type": "tool_result", "content": body}],
+                )
+                continue
+            if role not in ("user", "assistant"):
+                continue
+
+            blocks: list[dict] = []
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                bt = b.get("type")
+                if bt == "text" and b.get("text"):
+                    blocks.append({"type": "text", "text": b["text"]})
+                elif bt == "thinking" and b.get("thinking"):
+                    blocks.append({"type": "thinking", "thinking": b["thinking"]})
+                elif bt == "toolCall":
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "name": b.get("name", "?"),
+                            "input": b.get("arguments") or {},
+                        }
+                    )
+            if blocks:
+                yield Turn(ts=ts, role=role, blocks=blocks)
+
+
+def _omp_session_tokens(path: Path) -> int | None:
+    """Input + output only — cacheRead/cacheWrite excluded, same as Claude."""
+    total = 0
+    found = False
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "message":
+                continue
+            message = event.get("message") or {}
+            if message.get("role") != "assistant":
+                continue
+            usage = message.get("usage")
+            if not usage:
+                continue
+            found = True
+            total += usage.get("input", 0) + usage.get("output", 0)
+    return total if found else None
+
+
+
+# ---------------------------------------------------------------------------
 # Unified dispatch — every command operates on ProjectHandle/SessionHandle,
 # regardless of which backend produced them
 # ---------------------------------------------------------------------------
@@ -921,6 +1098,8 @@ def _iter_all_projects(sources: tuple[str, ...]):
         yield from _codex_iter_projects()
     if "cursor" in sources:
         yield from _cursor_iter_projects()
+    if "omp" in sources:
+        yield from _omp_iter_projects()
 
 
 def _project_sessions(project: ProjectHandle) -> list[SessionHandle]:
@@ -930,6 +1109,8 @@ def _project_sessions(project: ProjectHandle) -> list[SessionHandle]:
         return _codex_project_sessions(project)
     if project.source == "cursor":
         return _cursor_project_sessions(project)
+    if project.source == "omp":
+        return _omp_project_sessions(project)
     return []
 
 
@@ -940,6 +1121,8 @@ def _handle_iter_turns(handle: SessionHandle, include_subagents: bool) -> list[T
         return list(_codex_iter_turns(handle.path))
     if handle.source == "cursor":
         return _cursor_iter_turns(handle.composer_id)
+    if handle.source == "omp":
+        return list(_omp_iter_turns(handle.path))
     return []
 
 
@@ -950,6 +1133,8 @@ def _handle_token_total(handle: SessionHandle) -> int | None:
         return _codex_session_tokens(handle.path)
     if handle.source == "cursor":
         return _cursor_session_tokens(handle.composer_id)
+    if handle.source == "omp":
+        return _omp_session_tokens(handle.path)
     return None
 
 
@@ -1250,14 +1435,14 @@ def _print_handle_list(cwd_label: str, handles: list[SessionHandle], as_json: bo
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """Read your local Claude Code / Codex CLI / Cursor conversation history (read-only)."""
+    """Read your local Claude Code / Codex CLI / Cursor / Oh My Pi conversation history (read-only)."""
 
 
 _SOURCE_OPTION = click.option(
     "--source",
     "source_filter",
     type=click.Choice(SOURCES),
-    help="Restrict to one source (default: claude + codex + cursor, all at once).",
+    help="Restrict to one source (default: claude + codex + cursor + omp, all at once).",
 )
 
 
@@ -1433,8 +1618,8 @@ def search(text: str, source_filter: str | None, project_query: str | None, limi
     """Full-text search across session transcripts, across every source.
 
     A cheap pre-filter runs before any full parsing — a raw-bytes substring
-    check for claude/codex's flat JSONL files, one batched SQL LIKE query for
-    cursor's SQLite store (no single-file check is possible there) — so
+    check for claude/codex/omp's flat JSONL files, one batched SQL LIKE query
+    for cursor's SQLite store (no single-file check is possible there) — so
     searching everywhere stays fast even with a lot of history.
     """
     sources = (source_filter,) if source_filter else SOURCES
@@ -1445,7 +1630,7 @@ def search(text: str, source_filter: str | None, project_query: str | None, limi
 
     results = []
     for h in sessions:
-        if h.source in ("claude", "codex"):
+        if h.source in ("claude", "codex", "omp"):
             with h.path.open("rb") as f:
                 if needle_bytes.lower() not in f.read().lower():
                     continue
@@ -1492,8 +1677,8 @@ def search(text: str, source_filter: str | None, project_query: str | None, limi
 def unread(source_filter: str | None, project_query: str | None, limit: int, mark_all_read: bool, as_json: bool) -> None:
     """List threads with activity you haven't seen yet, across every source.
 
-    Claude Code and Codex have no concept of read/unread, so those two are
-    tracked via local bookkeeping (~/.config/agent-conv-cli/read-state.json,
+    Claude Code, Codex, and Oh My Pi have no concept of read/unread, so those
+    three are tracked via local bookkeeping (~/.config/agent-conv-cli/read-state.json,
     override with $AGENT_CONV_STATE_DIR): a thread counts as unread until you
     view its full content via `thread` or `read --expand` (or catch up in
     bulk with --mark-all-read), same as a message you've never opened, and
@@ -1501,7 +1686,7 @@ def unread(source_filter: str | None, project_query: str | None, limit: int, mar
     tracks its own unread state natively — that flag is read directly and
     never written to (--mark-all-read skips Cursor threads; open them in
     Cursor itself to clear it). The very first run will likely show your
-    whole Claude/Codex history as unread — run `unread --mark-all-read` once
+    whole Claude/Codex/OMP history as unread — run `unread --mark-all-read` once
     to start clean, then let normal usage keep it current.
     """
     sources = (source_filter,) if source_filter else SOURCES
@@ -1540,8 +1725,8 @@ def find(text: str, source_filter: str | None, limit: int, as_json: bool) -> Non
     """Find a thread by name — i.e. by its derived title — across every
     project and source.
 
-    Only Cursor stores a real thread title; Claude Code/Codex don't, so
-    "name" there is the first substantive thing you said in it (same text
+    Cursor and Oh My Pi store a real thread title; Claude Code/Codex don't,
+    so "name" there is the first substantive thing you said in it (same text
     `chats`/`read` derive titles from). Unlike `search`, which matches
     anywhere in a transcript and returns one row per matching turn, this
     matches only the title and returns one row per thread.
@@ -1552,7 +1737,7 @@ def find(text: str, source_filter: str | None, limit: int, as_json: bool) -> Non
     state = _load_read_state()
     results = []
     for h in _sessions_for_scope(None, sources):
-        if h.source in ("claude", "codex"):
+        if h.source in ("claude", "codex", "omp"):
             # Cheap prefilter: a title always comes from early in the file,
             # so a raw-byte substring check on the first chunk skips most
             # files without a full parse.

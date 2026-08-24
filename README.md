@@ -1,7 +1,7 @@
 # agent-conv-cli
 
-Terminal access to your **own** Claude Code, Codex CLI, and Cursor
-conversation history — one reader across all three, read-only:
+Terminal access to your **own** Claude Code, Codex CLI, Cursor, and Oh My Pi
+conversation history — one reader across all four, read-only:
 
 ```bash
 agent-conv chats                        # projects (channels) across every source, most recent first
@@ -34,7 +34,7 @@ Unlike Slack, there's no "loose message outside any thread" — every turn
 belongs to some session, so a project has nothing to show beyond its
 threads.
 
-## Three sources, one model
+## Four sources, one model
 
 - **Claude Code** — `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`, one
   JSON-lines file per session (Anthropic Messages API shape).
@@ -46,11 +46,15 @@ threads.
 - **Cursor** — one SQLite database,
   `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`. A
   `composerHeaders` table (one row per chat, with a **real stored title and
-  native unread flag** — the only one of the three with either) plus a
+  native unread flag**) plus a
   `cursorDiskKV` blob table keyed by `composerData:<id>` (bubble order) and
   `bubbleId:<composerId>:<bubbleId>` (each bubble's text). Opened read-only
   (`mode=ro`) — no snapshot-copy needed (the db is often 1GB+; SQLite's own
   WAL readers already get a consistent view without one).
+- **Oh My Pi** — `~/.omp/agent/sessions/<cwd-encoded>/<timestamp>_<uuid>.jsonl`
+  (override with `$OMP_HOME`). Each file starts with a `session` event carrying
+  the real `cwd`, session id, and stored title; this CLI groups by that cwd.
+  Unread is local bookkeeping, same as Claude Code/Codex.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering/cleaning/search work identically regardless of source. The same
@@ -58,7 +62,7 @@ real directory often shows up under more than one source (you `cd` into a
 repo and reach for whichever agent fits) — `chats` lists each `(source,
 project)` pair as its own row, but a query that exactly names one real
 directory merges every source's threads for it into one recency-sorted list
-in `read`/`thread`/`search`/`find`/`unread`. `--source claude|codex|cursor`
+in `read`/`thread`/`search`/`find`/`unread`. `--source claude|codex|cursor|omp`
 narrows any of them back to one backend.
 
 ## Prerequisites
