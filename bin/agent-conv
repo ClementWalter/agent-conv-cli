@@ -81,6 +81,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -1593,6 +1594,104 @@ def thread(
     click.echo(f"# [{handle.source}] {handle.project_cwd} — thread {handle.uuid} — {title} — {len(out)} turns, {_format_tokens(tokens)} tok\n")
     for m in out:
         click.echo(f"{_local_ts(m['ts'])}  {m['role']}: {m['text']}\n")
+
+
+# --- export: the conversation corpus ------------------------------------------
+#
+# Every session, every source, as one small JSON file of user/assistant text:
+# what was said and answered, never tool output. That is 2% of the raw logs
+# and is what "my conversations, everywhere" needs: a private git repo synced
+# from each machine, readable by this CLI or by an agent looking for context.
+
+# Token-shaped strings that tool output leaks into transcripts. Each pattern is
+# replaced by a marker so a transcript can never re-leak a credential.
+_SECRET_PATTERNS = [
+    ("slack", re.compile(r"xox[abcpes]-[A-Za-z0-9-]{20,}")),
+    ("github", re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}")),
+    ("1password", re.compile(r"ops_[A-Za-z0-9_-]{40,}")),
+    ("google", re.compile(r"ya29\.[A-Za-z0-9_-]{30,}")),
+    ("aws", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("bearer", re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{30,}")),
+    ("privkey", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----")),
+]
+
+
+def _scrub_secrets(text: str) -> str:
+    for kind, pattern in _SECRET_PATTERNS:
+        text = pattern.sub(f"[REDACTED:{kind}]", text)
+    return text
+
+
+def _session_author(cwd: str, first_text: str) -> str:
+    """Who typed the user turns: a person, or a launcher/worker prompting headlessly."""
+    if "/heartbeats/" in cwd or first_text.startswith(("Lis et applique", "Read and follow the instructions")):
+        return "system"
+    return "human"
+
+
+def _export_session(handle: SessionHandle, machine: str, out_root: Path) -> Path | None:
+    """Write one session file; return its path, or None when the stored copy is already current."""
+    target = out_root / machine / handle.source / _encode_path(handle.project_cwd) / f"{handle.uuid}.json"
+    if target.exists():
+        try:
+            if json.loads(target.read_text()).get("mtime", 0) >= handle.mtime:
+                return None
+        except (OSError, ValueError):
+            pass
+    turns = _handle_rendered_turns(handle, raw=False, include_subagents=False, limit=0)
+    if not turns:
+        return None
+    first_user = next((t["text"] for t in turns if t["role"] == "user"), "")
+    doc = {
+        "source": handle.source,
+        "session": handle.uuid,
+        "machine": machine,
+        "cwd": handle.project_cwd,
+        "title": _scrub_secrets(_handle_title(handle)),
+        "author": _session_author(handle.project_cwd, first_user),
+        "mtime": handle.mtime,
+        "started": turns[0]["ts"],
+        "last": turns[-1]["ts"],
+        "turns": [{"ts": t["ts"], "role": t["role"], "text": _scrub_secrets(t["text"])} for t in turns],
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+    return target
+
+
+@cli.command()
+@click.option("--out", "out_dir", required=True, help="Root of the corpus checkout, e.g. ~/Documents/corpus.")
+@click.option("--machine", default=None, help="Folder name for this machine (default: hostname).")
+@click.option("--source", "source_filter", type=click.Choice(SOURCES), default=None, help="Only this backend.")
+@click.option("--since", default=None, help="Only sessions active at/after this ISO date (default: all).")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def export(out_dir: str, machine: str | None, source_filter: str | None, since: str | None, as_json: bool) -> None:
+    """Export every session as text to OUT/<machine>/<source>/<cwd>/<uuid>.json.
+
+    Only user and assistant text is kept, with tool calls summarized and
+    tool output dropped, and token-shaped strings are redacted. A session
+    whose stored copy is already as recent as the source is skipped, so the
+    command is cheap to run hourly. Each file carries `author`: "human" for
+    sessions a person drove, "system" for heartbeat/worker prompts.
+    """
+    out_root = Path(out_dir).expanduser()
+    machine = machine or socket.gethostname().split(".")[0]
+    sources = (source_filter,) if source_filter else SOURCES
+    cutoff = datetime.fromisoformat(since).timestamp() if since else 0.0
+    written, skipped = [], 0
+    for project in _iter_all_projects(sources):
+        for handle in _project_sessions(project):
+            if handle.mtime < cutoff:
+                continue
+            path = _export_session(handle, machine, out_root)
+            if path is None:
+                skipped += 1
+            else:
+                written.append(str(path.relative_to(out_root)))
+    if as_json:
+        click.echo(json.dumps({"machine": machine, "written": written, "skipped": skipped}))
+        return
+    click.echo(f"{machine}: {len(written)} session(s) written, {skipped} already current, under {out_root}")
 
 
 def _sessions_for_scope(project_query: str | None, sources: tuple[str, ...]) -> list[SessionHandle]:
