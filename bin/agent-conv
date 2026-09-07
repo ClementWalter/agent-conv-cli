@@ -1609,6 +1609,37 @@ def _chatgpt_get_conversation(session, cid: str):
     return resp if resp is not None and resp.status_code == 200 else None
 
 
+def _chatgpt_remote_search(session, query: str, limit: int) -> list[dict]:
+    """Search chatgpt.com's own index of the account's conversations.
+
+    This is the one read that does not need a sync: the server matches across
+    the entire history, including conversations never pulled locally, and
+    returns the matching message as a snippet.
+    """
+    from urllib.parse import urlencode
+
+    hits: list[dict] = []
+    cursor = None
+    while len(hits) < limit:
+        params = {"query": query}
+        if cursor:
+            params["cursor"] = cursor
+        resp = _chatgpt_get_with_backoff(
+            session, f"{CHATGPT_HOST}/backend-api/conversations/search?{urlencode(params)}"
+        )
+        if resp is None or resp.status_code != 200:
+            break
+        payload = resp.json() or {}
+        items = payload.get("items") or []
+        if not items:
+            break
+        hits.extend(items)
+        cursor = payload.get("cursor")
+        if not cursor:
+            break
+    return hits[:limit]
+
+
 def _chatgpt_epoch(value) -> float:
     """ChatGPT returns epoch floats in bodies and ISO strings in listings."""
     if value in (None, ""):
@@ -3049,6 +3080,56 @@ def chatgpt_sync(limit: int, refresh: bool, assets: bool, until_complete: bool, 
                     f"so it resumes where this stopped.",
                     err=True,
                 )
+
+
+@chatgpt_group.command("search")
+@click.argument("text")
+@click.option("--limit", default=30, show_default=True, help="Maximum hits per account.")
+@click.option("--account", "account_filter", default=None, help="Only this account id or email.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def chatgpt_search(text: str, limit: int, account_filter: str | None, as_json: bool) -> None:
+    """Search chatgpt.com's own index, live — no sync needed.
+
+    Unlike `agent-conv search`, which reads the local cache across every
+    source, this asks chatgpt.com to match across the account's whole history,
+    so it finds conversations that have never been pulled locally. Rows for
+    those are marked, and `chatgpt sync` is what brings their text down.
+    """
+    rows = []
+    for auth in _chatgpt_accounts():
+        if account_filter and account_filter not in (auth["account_id"], auth["email"]):
+            continue
+        cached = {p.stem for p in _chatgpt_conv_files(auth["account_id"])}
+        for hit in _chatgpt_remote_search(auth["session"], text, limit):
+            cid = hit.get("conversation_id") or ""
+            snippet = _chatgpt_clean(((hit.get("payload") or {}).get("snippet") or "")).replace("\n", " ")
+            rows.append({
+                "source": "chatgpt",
+                "cwd": f"chatgpt:{auth['email']}",
+                "uuid": cid,
+                "title": hit.get("title") or "",
+                "ts": datetime.fromtimestamp(
+                    _chatgpt_epoch(hit.get("update_time")), tz=timezone.utc
+                ).isoformat() if hit.get("update_time") else "",
+                "snippet": snippet,
+                "cached": cid in cached,
+            })
+    if as_json:
+        click.echo(json.dumps(rows, ensure_ascii=False))
+        return
+    if not rows:
+        click.echo(f"No chatgpt.com conversation matches {text!r}.")
+        return
+    for r in rows:
+        mark = "" if r["cached"] else "  (not synced)"
+        click.echo(f"{_local_ts(r['ts'])}  [chatgpt]  {r['cwd']}  [{r['uuid'][:8]}]  "
+                   f"{r['title'][:44]}{mark}")
+        if r["snippet"]:
+            click.echo(f"    {r['snippet'][:160]}")
+    missing = sum(1 for r in rows if not r["cached"])
+    if missing:
+        click.echo(f"\n{missing} of {len(rows)} hit(s) are not in the local cache yet — "
+                   f"`agent-conv chatgpt sync` pulls their text down.", err=True)
 
 
 @cli.command("append")

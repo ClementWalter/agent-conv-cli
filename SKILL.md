@@ -290,6 +290,28 @@ progress.
 agent-conv chatgpt sync --assets --until-complete   # the unattended full sync
 ```
 
+### `agent-conv chatgpt search <text> [--limit N] [--account ID|EMAIL] [--json]`
+
+**ChatGPT only, and the one read that needs no sync.** Asks chatgpt.com to
+search its own index of the account, so it matches across the entire history —
+including conversations that have never been pulled into the local cache,
+which are marked `(not synced)`. Each hit carries the matching message as a
+snippet, so it is often answer enough on its own; `chatgpt sync` is what
+brings the full text down.
+
+Use it when the full sync has not finished (or has not been run) and something
+needs finding now. Note the distinction:
+
+| | reads | covers |
+|---|---|---|
+| `agent-conv search <text>` | the local cache, offline | every source, but only what is synced |
+| `agent-conv chatgpt search <text>` | chatgpt.com, live | the whole ChatGPT history |
+
+```bash
+agent-conv chatgpt search "assurance habitation"
+agent-conv chatgpt search "recette" --limit 50 --json
+```
+
 ### `agent-conv skill-usage [--since-days N] [--recent N] [--json]`
 
 **Claude Code only** — Codex and Cursor have no equivalent "Skill" tool

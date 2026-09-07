@@ -395,3 +395,63 @@ def test_until_complete_stops_as_soon_as_nothing_is_left(rounds_recorder) -> Non
 def test_until_complete_honours_its_safety_stop(rounds_recorder) -> None:
     calls, _ = rounds_recorder([7] * 50, args=["--until-complete", "--wait", "0", "--max-rounds", "4"])
     assert calls == 4
+
+
+class _StubSearchSession:
+    """Serves scripted search pages, following the `cursor` it hands out."""
+
+    def __init__(self, pages: list[dict]) -> None:
+        self.pages = pages
+        self.urls: list[str] = []
+
+    def get(self, url: str, timeout: int = 0):
+        self.urls.append(url)
+        return _StubJson(self.pages[len(self.urls) - 1] if len(self.urls) <= len(self.pages) else {"items": []})
+
+
+def _hit(cid: str) -> dict:
+    return {"conversation_id": cid, "title": cid, "update_time": 1.0,
+            "payload": {"snippet": "match"}}
+
+
+def test_search_returns_the_first_page_of_hits() -> None:
+    session = _StubSearchSession([{"items": [_hit("a"), _hit("b")], "cursor": None}])
+    assert [h["conversation_id"] for h in ac._chatgpt_remote_search(session, "q", 30)] == ["a", "b"]
+
+
+def test_search_follows_the_cursor_across_pages() -> None:
+    session = _StubSearchSession([
+        {"items": [_hit("a")], "cursor": "c1"},
+        {"items": [_hit("b")], "cursor": None},
+    ])
+    assert len(ac._chatgpt_remote_search(session, "q", 30)) == 2
+
+
+def test_search_passes_the_cursor_back_to_the_server() -> None:
+    session = _StubSearchSession([
+        {"items": [_hit("a")], "cursor": "c1"},
+        {"items": [_hit("b")], "cursor": None},
+    ])
+    ac._chatgpt_remote_search(session, "q", 30)
+    assert "cursor=c1" in session.urls[1]
+
+
+def test_search_stops_at_the_requested_limit() -> None:
+    session = _StubSearchSession([{"items": [_hit(str(i)) for i in range(10)], "cursor": "c1"}])
+    assert len(ac._chatgpt_remote_search(session, "q", 4)) == 4
+
+
+def test_search_stops_on_an_empty_page_rather_than_looping() -> None:
+    session = _StubSearchSession([{"items": [], "cursor": "c1"}])
+    ac._chatgpt_remote_search(session, "q", 30)
+    assert len(session.urls) == 1
+
+
+def test_a_query_is_url_encoded() -> None:
+    session = _StubSearchSession([{"items": [], "cursor": None}])
+    ac._chatgpt_remote_search(session, "dégât des eaux", 30)
+    assert " " not in session.urls[0]
+
+
+def test_search_yields_nothing_when_the_quota_blocks_it() -> None:
+    assert ac._chatgpt_remote_search(_StubSession([429] * 10), "q", 30) == []

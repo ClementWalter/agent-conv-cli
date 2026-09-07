@@ -15,6 +15,7 @@ agent-conv send "myproject" "..." --yes  # send a message into a Claude Code thr
 agent-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
 agent-conv chatgpt sync                  # pull chatgpt.com web chats into the local cache
 agent-conv chatgpt sync --assets --until-complete  # full sync incl. attachments, over as many rounds as the quota needs
+agent-conv chatgpt search "assurance"     # search chatgpt.com's OWN index, live — no sync needed
 agent-conv chatgpt accounts              # which ChatGPT accounts are cached / signed in
 agent-conv unread                        # what's new since you last viewed it
 agent-conv skill-usage                   # every Skill-tool invocation ever, count + last used (Claude Code only)
@@ -81,7 +82,11 @@ threads.
   once. Files old enough to have aged out of ChatGPT's storage are reported
   as gone, separately from ones a spent quota merely deferred. Because the
   limit is a quota, a large history needs several passes — `--until-complete`
-  repeats them on a timer until nothing is outstanding.
+  repeats them on a timer until nothing is outstanding. `chatgpt search` is
+  the way around the wait: it queries chatgpt.com's own index of the account,
+  so it matches across the *whole* history — including conversations never
+  pulled locally, which it marks — while `agent-conv search` stays the offline
+  full-text search over the cache, across every source.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering/cleaning/search work identically regardless of source. The same
