@@ -70,7 +70,10 @@ threads.
   conversation is a *tree* (every regenerate forks a branch), so only the path
   from `current_node` back to the root — the conversation as you last saw it —
   is rendered. Since there is no `cwd`, the channel is the account:
-  `chatgpt:<email>`.
+  `chatgpt:<email>`. Expect more than one sync on a large history:
+  chatgpt.com rate-limits conversation reads as a quota rather than a pace, so
+  sync backs off, then stops and reports what it could not fetch instead of
+  dropping it silently — re-running skips what is cached and resumes.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering/cleaning/search work identically regardless of source. The same

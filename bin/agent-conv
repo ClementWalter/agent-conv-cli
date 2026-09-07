@@ -1429,7 +1429,7 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, progress=None) 
             listed.extend(items)
             offset += len(items)
 
-    fetched = skipped = rate_limited = 0
+    fetched = skipped = quota_spent = 0
     for item in listed:
         cid = item.get("id")
         if not cid:
@@ -1446,14 +1446,14 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, progress=None) 
                 pass
         resp = _chatgpt_get_conversation(session, cid)
         if resp is None:
-            rate_limited += 1
-            # The limit is a quota, not a pace: once it is exhausted no amount
-            # of waiting inside one run helps. Stop, keep what was fetched
-            # (the cache makes the next run resume), and say so.
-            if rate_limited >= _CHATGPT_GIVE_UP_AFTER:
+            # Counted for the whole run, never reset: the limit is a quota, not
+            # a pace, so once it is spent the occasional conversation that
+            # still slips through does not mean the run can finish. Stopping
+            # beats crawling for hours — the cache makes the next run resume.
+            quota_spent += 1
+            if quota_spent >= _CHATGPT_GIVE_UP_AFTER:
                 break
             continue
-        rate_limited = 0
         if progress:
             progress(fetched + skipped + 1, len(listed), item.get("title") or cid)
         doc = resp.json()

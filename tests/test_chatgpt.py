@@ -197,3 +197,64 @@ def test_a_deleted_conversation_is_not_retried() -> None:
     session = _StubSession([404, 200])
     ac._chatgpt_get_conversation(session, "c1")
     assert session.calls == 1
+
+
+class _StubSyncSession:
+    """A chatgpt.com whose listing works but whose bodies are all quota-blocked
+    except the first, so a run cannot finish."""
+
+    def __init__(self, conversation_count: int) -> None:
+        self.items = [{"id": f"c{i}", "title": f"Chat {i}", "update_time": "2026-09-07T07:02:16.821661Z"}
+                      for i in range(conversation_count)]
+        self.body_calls = 0
+        self.headers: dict[str, str] = {}
+
+    def get(self, url: str, params: dict | None = None, timeout: int = 0):
+        if "/backend-api/conversations" in url:
+            if (params or {}).get("is_archived") == "true" or (params or {}).get("offset"):
+                return _StubJson({"items": []})
+            return _StubJson({"items": self.items})
+        self.body_calls += 1
+        if self.body_calls == 1:
+            return _StubJson({"conversation_id": "c0", "title": "Chat 0", "update_time": 1.0,
+                              "current_node": None, "mapping": {}})
+        return _StubResponse(429)
+
+
+class _StubJson(_StubResponse):
+    def __init__(self, payload: dict) -> None:
+        super().__init__(200)
+        self._payload = payload
+
+    def json(self) -> dict:
+        return self._payload
+
+
+@pytest.fixture
+def quota_blocked_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(ac, "CHATGPT_CACHE", tmp_path)
+    session = _StubSyncSession(conversation_count=50)
+    auth = {"session": session, "account_id": "acc-1", "email": "me@example.com",
+            "plan": "plus", "structure": "personal"}
+    stats = ac._chatgpt_sync_account(auth, limit=1000, refresh=False)
+    return session, stats
+
+
+def test_sync_stops_once_the_quota_is_spent(quota_blocked_sync) -> None:
+    """Without a run-total give-up this crawls every conversation at a minute each."""
+    session, _ = quota_blocked_sync
+    assert session.body_calls < 50
+
+
+def test_sync_reports_what_it_could_not_fetch(quota_blocked_sync) -> None:
+    _, stats = quota_blocked_sync
+    assert stats["remaining"] == 49
+
+
+def test_sync_keeps_whatever_it_managed_to_fetch(quota_blocked_sync) -> None:
+    _, stats = quota_blocked_sync
+    assert stats["fetched"] == 1
+
+
+def test_an_interrupted_sync_still_leaves_a_readable_account(quota_blocked_sync, tmp_path: Path) -> None:
+    assert json.loads((tmp_path / "acc-1" / "account.json").read_text())["email"] == "me@example.com"
