@@ -478,3 +478,60 @@ def test_search_rows_are_listed_most_recent_first(monkeypatch: pytest.MonkeyPatc
     ])
     result = click.testing.CliRunner().invoke(ac.cli, ["chatgpt", "search", "q", "--json"])
     assert [r["uuid"] for r in json.loads(result.output)] == ["new", "mid", "old"]
+
+
+@pytest.fixture
+def targeted_sync(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Invoke `chatgpt sync` with a scope, against a stubbed account."""
+    def run(args: list[str], hits: list[dict] | None = None, outcome: str = "ok"):
+        monkeypatch.setattr(ac, "CHATGPT_CACHE", tmp_path)
+        monkeypatch.setattr(ac, "_chatgpt_accounts", lambda: iter([
+            {"session": None, "account_id": "acc", "email": "me@example.com",
+             "plan": "plus", "structure": "personal", "profile": "chrome/Default"}]))
+        monkeypatch.setattr(ac, "_chatgpt_remote_search", lambda s, q, n: hits or [])
+        monkeypatch.setattr(ac, "_chatgpt_fetch_conversation",
+                            lambda s, cid: (outcome, {"title": "T", "mapping": {}} if outcome == "ok" else None))
+        bulk_ran = []
+        monkeypatch.setattr(ac, "_chatgpt_sync_round",
+                            lambda *a, **k: bulk_ran.append(1) or [])
+        result = click.testing.CliRunner().invoke(ac.cli, ["chatgpt", "sync", *args])
+        return result, bulk_ran
+    return run
+
+
+def test_naming_an_id_syncs_only_that_conversation(targeted_sync, tmp_path: Path) -> None:
+    targeted_sync(["conv-1"])
+    assert (tmp_path / "acc" / "conv" / "conv-1.json").exists()
+
+
+def test_naming_an_id_skips_the_bulk_listing(targeted_sync) -> None:
+    """The whole point of a scoped sync is not enumerating the account."""
+    _, bulk_ran = targeted_sync(["conv-1"])
+    assert bulk_ran == []
+
+
+def test_a_search_scope_syncs_what_it_finds(targeted_sync, tmp_path: Path) -> None:
+    targeted_sync(["--search", "q"], hits=[{"conversation_id": "found-1", "title": "Found"}])
+    assert (tmp_path / "acc" / "conv" / "found-1.json").exists()
+
+
+def test_a_search_scope_leaves_already_cached_hits_alone(targeted_sync, tmp_path: Path) -> None:
+    (tmp_path / "acc" / "conv").mkdir(parents=True)
+    (tmp_path / "acc" / "conv" / "have.json").write_text('{"title": "have"}')
+    result, _ = targeted_sync(["--search", "q"], hits=[{"conversation_id": "have", "title": "Have"}])
+    assert "Nothing to do" in result.output
+
+
+def test_no_scope_falls_through_to_the_bulk_sync(targeted_sync) -> None:
+    _, bulk_ran = targeted_sync([])
+    assert bulk_ran == [1]
+
+
+def test_a_rate_limited_target_is_not_written_to_the_cache(targeted_sync, tmp_path: Path) -> None:
+    targeted_sync(["conv-1"], outcome="quota")
+    assert not (tmp_path / "acc" / "conv" / "conv-1.json").exists()
+
+
+def test_a_rate_limited_target_says_to_retry(targeted_sync) -> None:
+    result, _ = targeted_sync(["conv-1"], outcome="quota")
+    assert "retry later" in result.output
