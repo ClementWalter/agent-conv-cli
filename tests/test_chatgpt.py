@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 
+import click.testing
 import pytest
 
 loader = importlib.machinery.SourceFileLoader("agent_conv", str(Path(__file__).parent.parent / "bin" / "agent-conv"))
@@ -344,3 +345,53 @@ class _StubBytes(_StubResponse):
     def __init__(self, content: bytes) -> None:
         super().__init__(200)
         self.content = content
+
+
+def test_outstanding_counts_work_a_later_round_can_still_do() -> None:
+    results = [{"remaining": 5, "assets_blocked": 2}, {"remaining": 0, "assets_blocked": 1}]
+    assert ac._chatgpt_outstanding(results) == 8
+
+
+def test_files_gone_for_good_are_not_counted_as_outstanding() -> None:
+    """Otherwise --until-complete would spin until --max-rounds every time."""
+    assert ac._chatgpt_outstanding([{"remaining": 0, "assets_blocked": 0, "assets_missing": 12}]) == 0
+
+
+@pytest.fixture
+def rounds_recorder(monkeypatch: pytest.MonkeyPatch):
+    """Drive the command's round loop with scripted per-round outcomes."""
+    def run(outcomes: list[int], **kwargs):
+        seen = []
+
+        def fake_round(limit, refresh, assets, account_filter, verbose):
+            seen.append(1)
+            left = outcomes[len(seen) - 1] if len(seen) <= len(outcomes) else 0
+            return [{"remaining": left, "assets_blocked": 0, "fetched": 1,
+                     "skipped": 0, "assets": 0, "assets_missing": 0}]
+
+        monkeypatch.setattr(ac, "_chatgpt_sync_round", fake_round)
+        monkeypatch.setattr(ac.time, "sleep", lambda _s: None)
+        runner = click.testing.CliRunner()
+        result = runner.invoke(ac.cli, ["chatgpt", "sync", *kwargs.pop("args", [])])
+        return len(seen), result
+    return run
+
+
+def test_a_plain_sync_makes_exactly_one_pass(rounds_recorder) -> None:
+    calls, _ = rounds_recorder([9, 9, 9], args=[])
+    assert calls == 1
+
+
+def test_until_complete_keeps_going_while_work_remains(rounds_recorder) -> None:
+    calls, _ = rounds_recorder([5, 3, 0], args=["--until-complete", "--wait", "0"])
+    assert calls == 3
+
+
+def test_until_complete_stops_as_soon_as_nothing_is_left(rounds_recorder) -> None:
+    calls, _ = rounds_recorder([0, 9, 9], args=["--until-complete", "--wait", "0"])
+    assert calls == 1
+
+
+def test_until_complete_honours_its_safety_stop(rounds_recorder) -> None:
+    calls, _ = rounds_recorder([7] * 50, args=["--until-complete", "--wait", "0", "--max-rounds", "4"])
+    assert calls == 4

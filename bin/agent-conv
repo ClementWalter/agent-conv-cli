@@ -2941,33 +2941,25 @@ def chatgpt_accounts(as_json: bool) -> None:
                    f"{r['cached_conversations']} cached  — {where}")
 
 
-@chatgpt_group.command("sync")
-@click.option("--limit", default=1000, help="Most recent conversations to consider per account.")
-@click.option("--refresh", is_flag=True, help="Refetch bodies even when the cached copy is current.")
-@click.option("--assets", is_flag=True,
-              help="Also download attached images/PDFs/audio (slower: each file costs extra requests).")
-@click.option("--account", "account_filter", default=None, help="Only this account id or email.")
-@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
-def chatgpt_sync(limit: int, refresh: bool, assets: bool, account_filter: str | None, as_json: bool) -> None:
-    """Pull chatgpt.com conversations into the local cache, per signed-in account.
-
-    Reads the session straight out of a local Chromium profile, so there is
-    nothing to log into here. Every other command then works off the cache.
-    """
+def _chatgpt_sync_round(limit: int, refresh: bool, assets: bool,
+                        account_filter: str | None, verbose: bool) -> list[dict]:
+    """One pass over every signed-in account. Re-authenticates as it goes, so
+    a long `--until-complete` run survives a token going stale between rounds."""
     results = []
     for auth in _chatgpt_accounts():
         if account_filter and account_filter not in (auth["account_id"], auth["email"]):
             continue
+
         def progress(done: int, total: int, title: str, _email=auth["email"]) -> None:
             click.echo(f"  [{done}/{total}] {_email}: {title[:60]}", err=True)
 
         stats = _chatgpt_sync_account(
             auth, limit=limit, refresh=refresh, assets=assets,
-            progress=None if as_json else progress,
+            progress=progress if verbose else None,
         )
         stats.update(account_id=auth["account_id"], email=auth["email"], profile=auth["profile"])
         results.append(stats)
-        if not as_json:
+        if verbose:
             line = (f"{auth['email']}: {stats['listed']} listed, "
                     f"{stats['fetched']} fetched, {stats['skipped']} unchanged")
             if assets:
@@ -2975,23 +2967,88 @@ def chatgpt_sync(limit: int, refresh: bool, assets: bool, account_filter: str | 
                 if stats["assets_missing"]:
                     line += f", {stats['assets_missing']} gone from chatgpt.com"
                 if stats["assets_blocked"]:
-                    line += f", {stats['assets_blocked']} rate-limited (retry later)"
+                    line += f", {stats['assets_blocked']} rate-limited"
             click.echo(line)
-            if stats["remaining"]:
+    return results
+
+
+def _chatgpt_outstanding(results: list[dict]) -> int:
+    """Work a later round could still pick up. Files already gone from
+    chatgpt.com are excluded — waiting will never bring those back."""
+    return sum(r["remaining"] + r["assets_blocked"] for r in results)
+
+
+@chatgpt_group.command("sync")
+@click.option("--limit", default=1000, help="Most recent conversations to consider per account.")
+@click.option("--refresh", is_flag=True, help="Refetch bodies even when the cached copy is current.")
+@click.option("--assets", is_flag=True,
+              help="Also download attached images/PDFs/audio (slower: each file costs extra requests).")
+@click.option("--until-complete", is_flag=True,
+              help="Keep going in rounds, waiting for the quota to refill, until nothing is left.")
+@click.option("--wait", default=900, show_default=True,
+              help="Seconds to wait between rounds of --until-complete.")
+@click.option("--max-rounds", default=60, show_default=True,
+              help="Safety stop for --until-complete.")
+@click.option("--account", "account_filter", default=None, help="Only this account id or email.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def chatgpt_sync(limit: int, refresh: bool, assets: bool, until_complete: bool, wait: int,
+                 max_rounds: int, account_filter: str | None, as_json: bool) -> None:
+    """Pull chatgpt.com conversations into the local cache, per signed-in account.
+
+    Reads the session straight out of a local Chromium profile, so there is
+    nothing to log into here. Every other command then works off the cache.
+
+    chatgpt.com limits conversation reads by quota rather than by pace, so one
+    pass over a large history stops early. `--until-complete` keeps retrying
+    on a timer until nothing is outstanding — expect hours for a first full
+    sync, and note it is safe to interrupt, since the cache resumes.
+    """
+    verbose = not as_json
+    rounds: list[list[dict]] = []
+    for round_no in range(1, (max_rounds if until_complete else 1) + 1):
+        if until_complete and verbose:
+            click.echo(f"— round {round_no} —", err=True)
+        results = _chatgpt_sync_round(limit, refresh, assets, account_filter, verbose)
+        if not results:
+            if rounds:
+                break  # accounts vanished mid-run (signed out); keep what we have
+            raise click.ClickException(
+                "No signed-in ChatGPT session found in any local browser profile. "
+                "Sign in to chatgpt.com in Chrome/Arc/Brave/Edge and retry."
+            )
+        rounds.append(results)
+        outstanding = _chatgpt_outstanding(results)
+        if not until_complete:
+            break
+        if not outstanding:
+            if verbose:
+                click.echo("nothing outstanding — sync complete.")
+            break
+        if round_no < max_rounds:
+            if verbose:
+                click.echo(f"  {outstanding} outstanding; waiting {wait}s for the quota to refill…", err=True)
+            time.sleep(wait)
+
+    totals = {k: sum(r.get(k, 0) for rd in rounds for r in rd)
+              for k in ("fetched", "skipped", "assets", "assets_missing")}
+    if as_json:
+        click.echo(json.dumps({"rounds": rounds, "totals": totals}, ensure_ascii=False))
+        return
+    if until_complete:
+        click.echo(f"{len(rounds)} round(s): {totals['fetched']} conversations fetched, "
+                   f"{totals['assets']} files saved, {totals['assets_missing']} gone from chatgpt.com")
+        left = _chatgpt_outstanding(rounds[-1]) if rounds else 0
+        if left:
+            click.echo(f"{left} still outstanding — re-run to continue.", err=True)
+    else:
+        for r in rounds[0]:
+            if r["remaining"]:
                 click.echo(
-                    f"  {stats['remaining']} not fetched — chatgpt.com's quota is spent. "
-                    f"Re-run `agent-conv chatgpt sync` later; cached conversations are skipped, "
+                    f"  {r['remaining']} not fetched — chatgpt.com's quota is spent. "
+                    f"Re-run (or use --until-complete); cached conversations are skipped, "
                     f"so it resumes where this stopped.",
                     err=True,
                 )
-    if as_json:
-        click.echo(json.dumps(results, ensure_ascii=False))
-        return
-    if not results:
-        raise click.ClickException(
-            "No signed-in ChatGPT session found in any local browser profile. "
-            "Sign in to chatgpt.com in Chrome/Arc/Brave/Edge and retry."
-        )
 
 
 @cli.command("append")
