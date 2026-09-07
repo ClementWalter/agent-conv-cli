@@ -1202,6 +1202,18 @@ def _append_log_turn(mouth: str, role: str, text: str, machine: str | None = Non
         raise click.ClickException("empty turn")
     if role not in ("user", "assistant"):
         raise click.ClickException(f"bad role {role!r}")
+    support = Path(os.environ.get("BRAIN_SUPPORT", str(Path.home() / "Library/Application Support/Brain")))
+    config_path = support / "runtime.json"
+    if config_path.exists():
+        config = json.loads(config_path.read_text())
+        if config.get("mode") == "active" and config.get("runtime"):
+            # The installed engine journals the turn before attempting cross-host sync.
+            result = subprocess.run([config["runtime"], "append-stdin"],
+                input=json.dumps({"mouth": mouth, "role": role, "text": text, "machine": machine}),
+                capture_output=True, text=True, timeout=60)
+            if result.returncode:
+                raise click.ClickException("Brain could not confirm the append; check its saved-input status before retrying.")
+            return Path(json.loads(result.stdout)["path"])
     machine = machine or _THIS_MACHINE
     roots = _corpus_roots()
     root = roots[0] if roots else Path.home() / "Documents" / "corpus"
