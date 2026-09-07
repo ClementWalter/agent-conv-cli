@@ -455,3 +455,18 @@ def test_a_query_is_url_encoded() -> None:
 
 def test_search_yields_nothing_when_the_quota_blocks_it() -> None:
     assert ac._chatgpt_remote_search(_StubSession([429] * 10), "q", 30) == []
+
+
+def test_search_rows_are_listed_most_recent_first(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The server pages by relevance, so concatenated pages arrive unordered."""
+    monkeypatch.setattr(ac, "CHATGPT_CACHE", tmp_path)
+    monkeypatch.setattr(ac, "_chatgpt_accounts", lambda: iter([
+        {"session": None, "account_id": "acc", "email": "me@example.com",
+         "plan": "plus", "structure": "personal", "profile": "chrome/Default"}]))
+    monkeypatch.setattr(ac, "_chatgpt_remote_search", lambda s, q, n: [
+        {"conversation_id": "old", "title": "Old", "update_time": 1735230720.0, "payload": {}},
+        {"conversation_id": "new", "title": "New", "update_time": 1788030660.0, "payload": {}},
+        {"conversation_id": "mid", "title": "Mid", "update_time": 1761908340.0, "payload": {}},
+    ])
+    result = click.testing.CliRunner().invoke(ac.cli, ["chatgpt", "search", "q", "--json"])
+    assert [r["uuid"] for r in json.loads(result.output)] == ["new", "mid", "old"]

@@ -3114,6 +3114,9 @@ def chatgpt_search(text: str, limit: int, account_filter: str | None, as_json: b
                 "snippet": snippet,
                 "cached": cid in cached,
             })
+    # The server pages by relevance, so concatenated pages arrive unordered;
+    # every other command here lists most recently active first.
+    rows.sort(key=lambda r: r["ts"], reverse=True)
     if as_json:
         click.echo(json.dumps(rows, ensure_ascii=False))
         return
