@@ -1518,7 +1518,7 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, assets: bool = 
             listed.extend(items)
             offset += len(items)
 
-    fetched = skipped = quota_spent = 0
+    fetched = skipped = quota_spent = gone = 0
     saved_assets = missing_assets = blocked_assets = 0
     for item in listed:
         cid = item.get("id")
@@ -1534,8 +1534,11 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, assets: bool = 
                     continue
             except (OSError, ValueError):
                 pass
-        resp = _chatgpt_get_conversation(session, cid)
-        if resp is None:
+        outcome, doc = _chatgpt_fetch_conversation(session, cid)
+        if outcome == "missing":
+            gone += 1  # deleted between the listing and now
+            continue
+        if outcome != "ok":
             # Counted for the whole run, never reset: the limit is a quota, not
             # a pace, so once it is spent the occasional conversation that
             # still slips through does not mean the run can finish. Stopping
@@ -1546,12 +1549,7 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, assets: bool = 
             continue
         if progress:
             progress(fetched + skipped + 1, len(listed), item.get("title") or cid)
-        doc = resp.json()
-        doc["conversation_id"] = doc.get("conversation_id") or cid
-        # An untitled conversation carries an explicit null, so fall back to
-        # the listing's title rather than leaving the key present-but-empty.
-        doc["title"] = doc.get("title") or item.get("title")
-        dest.write_text(json.dumps(doc, ensure_ascii=False))
+        _chatgpt_store_conversation(account_dir, cid, doc, item.get("title"))
         fetched += 1
         if assets:
             for message in (n.get("message") for n in (doc.get("mapping") or {}).values()):
@@ -1565,7 +1563,7 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, assets: bool = 
                         blocked_assets += 1
 
     _chatgpt_write_account(account_dir, auth)
-    remaining = len(listed) - fetched - skipped
+    remaining = len(listed) - fetched - skipped - gone
     return {"listed": len(listed), "fetched": fetched, "skipped": skipped,
             "remaining": max(remaining, 0),
             "assets": saved_assets, "assets_missing": missing_assets,
@@ -1603,10 +1601,30 @@ def _chatgpt_get_with_backoff(session, url: str, timeout: int = 60):
     return None if resp.status_code in (429, 500, 502, 503, 504) else resp
 
 
-def _chatgpt_get_conversation(session, cid: str):
-    """One conversation body, or None when it cannot be had this run."""
+def _chatgpt_fetch_conversation(session, cid: str) -> tuple[str, dict | None]:
+    """One conversation body as (outcome, doc).
+
+    "ok" carries the body; "missing" means chatgpt.com no longer has it;
+    "quota" means the rate limit outlasted the backoff, so a later run can
+    still get it. Keeping the last two apart is what lets sync say whether
+    what it skipped is lost or merely deferred.
+    """
     resp = _chatgpt_get_with_backoff(session, f"{CHATGPT_HOST}/backend-api/conversation/{cid}")
-    return resp if resp is not None and resp.status_code == 200 else None
+    if resp is None:
+        return "quota", None
+    if resp.status_code == 200:
+        return "ok", resp.json()
+    return "missing", None
+
+
+def _chatgpt_store_conversation(account_dir: Path, cid: str, doc: dict, title: str | None = None) -> Path:
+    """Write one conversation into the cache in the shape readers expect."""
+    doc["conversation_id"] = doc.get("conversation_id") or cid
+    doc["title"] = doc.get("title") or title
+    dest = account_dir / "conv" / f"{cid}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(doc, ensure_ascii=False))
+    return dest
 
 
 def _chatgpt_remote_search(session, query: str, limit: int) -> list[dict]:
@@ -3080,6 +3098,55 @@ def chatgpt_sync(limit: int, refresh: bool, assets: bool, until_complete: bool, 
                     f"so it resumes where this stopped.",
                     err=True,
                 )
+
+
+@chatgpt_group.command("pull")
+@click.argument("conversation_ids", nargs=-1)
+@click.option("--search", "search_text", default=None,
+              help="Pull every hit of this chatgpt.com search that is not cached yet.")
+@click.option("--limit", default=30, show_default=True, help="Maximum hits to pull with --search.")
+@click.option("--account", "account_filter", default=None, help="Only this account id or email.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def chatgpt_pull(conversation_ids: tuple[str, ...], search_text: str | None, limit: int,
+                 account_filter: str | None, as_json: bool) -> None:
+    """Fetch specific conversations now, instead of waiting for the full sync.
+
+    A search hit is directly pullable — the id it returns is the one the API
+    takes — so this is the way to read something the sync has not reached yet.
+    Pass conversation ids, or `--search` to pull whatever that query finds and
+    the cache is missing.
+    """
+    if not conversation_ids and not search_text:
+        raise click.UsageError("Give one or more conversation ids, or --search TEXT.")
+    results = []
+    for auth in _chatgpt_accounts():
+        if account_filter and account_filter not in (auth["account_id"], auth["email"]):
+            continue
+        account_dir = _chatgpt_account_dir(auth["account_id"])
+        cached = {p.stem for p in _chatgpt_conv_files(auth["account_id"])}
+        wanted: list[tuple[str, str | None]] = [(c, None) for c in conversation_ids]
+        if search_text:
+            wanted += [(h["conversation_id"], h.get("title"))
+                       for h in _chatgpt_remote_search(auth["session"], search_text, limit)
+                       if h.get("conversation_id") not in cached]
+        for cid, title in wanted:
+            outcome, doc = _chatgpt_fetch_conversation(auth["session"], cid)
+            if outcome == "ok":
+                _chatgpt_store_conversation(account_dir, cid, doc, title)
+            results.append({"account": auth["email"], "id": cid,
+                            "title": title or (doc or {}).get("title") or "", "outcome": outcome})
+            if not as_json:
+                mark = {"ok": "pulled", "missing": "gone from chatgpt.com",
+                        "quota": "rate-limited, retry later"}[outcome]
+                click.echo(f"  {cid[:8]}  {(results[-1]['title'] or '')[:44]:46} {mark}")
+    if as_json:
+        click.echo(json.dumps(results, ensure_ascii=False))
+        return
+    if not results:
+        click.echo("Nothing to pull — every hit is already cached.")
+        return
+    ok = sum(1 for r in results if r["outcome"] == "ok")
+    click.echo(f"{ok}/{len(results)} pulled into the cache.")
 
 
 @chatgpt_group.command("search")

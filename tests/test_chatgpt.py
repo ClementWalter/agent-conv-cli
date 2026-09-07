@@ -143,10 +143,13 @@ def test_a_conversation_cycle_cannot_hang_the_walk(tmp_path: Path) -> None:
 
 
 class _StubResponse:
-    """Stands in for a curl_cffi response — only status_code is consulted."""
+    """Stands in for a curl_cffi response."""
 
     def __init__(self, status_code: int) -> None:
         self.status_code = status_code
+
+    def json(self) -> dict:
+        return {}
 
 
 class _StubSession:
@@ -169,34 +172,39 @@ def no_real_sleeping(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_a_conversation_that_answers_immediately_is_returned() -> None:
     session = _StubSession([200])
-    assert ac._chatgpt_get_conversation(session, "c1").status_code == 200
+    assert ac._chatgpt_fetch_conversation(session, "c1")[0] == "ok"
 
 
 def test_rate_limiting_is_retried_until_it_clears() -> None:
     session = _StubSession([429, 429, 200])
-    assert ac._chatgpt_get_conversation(session, "c1").status_code == 200
+    assert ac._chatgpt_fetch_conversation(session, "c1")[0] == "ok"
 
 
 def test_a_cleared_rate_limit_costs_only_the_needed_attempts() -> None:
     session = _StubSession([429, 429, 200])
-    ac._chatgpt_get_conversation(session, "c1")
+    ac._chatgpt_fetch_conversation(session, "c1")
     assert session.calls == 3
 
 
-def test_a_never_clearing_quota_gives_up() -> None:
-    assert ac._chatgpt_get_conversation(_StubSession([429] * 10), "c1") is None
+def test_a_never_clearing_quota_is_reported_as_quota_not_absence() -> None:
+    """Conflating the two would tell the user a conversation no longer exists."""
+    assert ac._chatgpt_fetch_conversation(_StubSession([429] * 10), "c1")[0] == "quota"
+
+
+def test_a_deleted_conversation_is_reported_missing() -> None:
+    assert ac._chatgpt_fetch_conversation(_StubSession([404]), "c1")[0] == "missing"
 
 
 def test_giving_up_is_bounded_by_the_backoff_schedule() -> None:
     session = _StubSession([429] * 10)
-    ac._chatgpt_get_conversation(session, "c1")
+    ac._chatgpt_fetch_conversation(session, "c1")
     assert session.calls == len(ac._CHATGPT_BACKOFF) + 1
 
 
 def test_a_deleted_conversation_is_not_retried() -> None:
     """404 is a permanent answer, so it must not burn the backoff schedule."""
     session = _StubSession([404, 200])
-    ac._chatgpt_get_conversation(session, "c1")
+    ac._chatgpt_fetch_conversation(session, "c1")
     assert session.calls == 1
 
 
