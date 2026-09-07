@@ -270,6 +270,11 @@ source document. Older attachments are frequently gone from ChatGPT's storage
 (a permanent 404); sync counts those separately from files a spent quota only
 deferred, so "gone" never hides "try again later".
 
+**Sync is an optimisation, not a prerequisite.** `chatgpt search` + `chatgpt
+pull` already reach the entire history on demand. Sync exists so conversations
+land in the offline, cross-source `agent-conv search`/`read` without a round
+trip — useful, but not something to wait on.
+
 **Expect a big history to need many passes.** chatgpt.com allows only a
 couple of conversation reads back-to-back and then answers `429` until its
 window rolls over — it is a quota, not a pace, so slowing down does not help.
@@ -290,17 +295,35 @@ progress.
 agent-conv chatgpt sync --assets --until-complete   # the unattended full sync
 ```
 
+### `agent-conv chatgpt pull [IDS...] [--search TEXT] [--limit N] [--account ID|EMAIL] [--json]`
+
+Fetches specific conversations into the cache immediately, rather than waiting
+for a bulk sync to reach them. The id `chatgpt search` returns is exactly the
+id the conversation endpoint takes, so anything findable is directly
+pullable — verified: a conversation the sync had not touched pulled cleanly on
+demand.
+
+```bash
+agent-conv chatgpt pull --search "assurance habitation"   # every hit not cached yet
+agent-conv chatgpt pull 690326c8-...                       # specific ids
+```
+
+Each conversation reports `pulled`, `gone from chatgpt.com` (a permanent 404)
+or `rate-limited, retry later` — a spent quota is never dressed up as missing
+data. Running a bulk `sync` at the same time competes for the same quota and
+will make `pull` crawl; do one or the other.
+
 ### `agent-conv chatgpt search <text> [--limit N] [--account ID|EMAIL] [--json]`
 
-**ChatGPT only, and the one read that needs no sync.** Asks chatgpt.com to
+**ChatGPT only, and the primary way to read this source.** Asks chatgpt.com to
 search its own index of the account, so it matches across the entire history —
 including conversations that have never been pulled into the local cache,
 which are marked `(not synced)`. Each hit carries the matching message as a
 snippet, so it is often answer enough on its own; `chatgpt sync` is what
 brings the full text down.
 
-Use it when the full sync has not finished (or has not been run) and something
-needs finding now. Note the distinction:
+This plus `chatgpt pull` is the whole workflow — a bulk sync is never
+required. Note the distinction:
 
 | | reads | covers |
 |---|---|---|

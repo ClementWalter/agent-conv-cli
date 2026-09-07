@@ -13,9 +13,9 @@ agent-conv find "deploy-checklist"       # find a thread by name (its derived ti
 agent-conv fork "myproject" --yes        # continue a past Claude Code thread interactively, as a new one
 agent-conv send "myproject" "..." --yes  # send a message into a Claude Code thread headlessly, print the reply
 agent-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
-agent-conv chatgpt sync                  # pull chatgpt.com web chats into the local cache
-agent-conv chatgpt sync --assets --until-complete  # full sync incl. attachments, over as many rounds as the quota needs
-agent-conv chatgpt search "assurance"     # search chatgpt.com's OWN index, live — no sync needed
+agent-conv chatgpt search "assurance"     # search your WHOLE chatgpt.com history, live — no sync needed
+agent-conv chatgpt pull --search "assurance"  # fetch what that search found, straight into the cache
+agent-conv chatgpt sync                  # optional: warm the cache in bulk, for offline/cross-source reads
 agent-conv chatgpt accounts              # which ChatGPT accounts are cached / signed in
 agent-conv unread                        # what's new since you last viewed it
 agent-conv skill-usage                   # every Skill-tool invocation ever, count + last used (Claude Code only)
@@ -60,7 +60,13 @@ threads.
   the real `cwd`, session id, and stored title; this CLI groups by that cwd.
   Unread is local bookkeeping, same as Claude Code/Codex.
 - **ChatGPT web** — chatgpt.com has no local transcript store, so this is the
-  one source that syncs: `agent-conv chatgpt sync` pulls conversations into
+  one source that fetches over the network. The normal path needs no bulk
+  sync at all: `chatgpt search` queries chatgpt.com's own index of the whole
+  history and `chatgpt pull` fetches any hit straight into the cache, since
+  the id a search returns is the one the conversation endpoint takes.
+  `agent-conv chatgpt sync` is the optional bulk warmer — worth running so
+  conversations show up in offline, cross-source `search`/`read`, but never a
+  prerequisite. It pulls conversations into
   `~/.cache/agent-conv-cli/chatgpt/<account>/` (override with
   `$AGENT_CONV_CHATGPT_CACHE`) and every read command works off that cache, so
   `chats`/`read`/`search` stay offline and fast like the rest. There is nothing
@@ -82,11 +88,12 @@ threads.
   once. Files old enough to have aged out of ChatGPT's storage are reported
   as gone, separately from ones a spent quota merely deferred. Because the
   limit is a quota, a large history needs several passes — `--until-complete`
-  repeats them on a timer until nothing is outstanding. `chatgpt search` is
-  the way around the wait: it queries chatgpt.com's own index of the account,
-  so it matches across the *whole* history — including conversations never
-  pulled locally, which it marks — while `agent-conv search` stays the offline
-  full-text search over the cache, across every source.
+  repeats them on a timer until nothing is outstanding — but since
+  `search`+`pull` already cover the whole history on demand, a full sync is a
+  convenience, not a milestone to wait for. Note the split: `chatgpt search`
+  hits chatgpt.com live and reaches everything, marking hits the cache is
+  missing; `agent-conv search` is the offline full-text search over what has
+  been cached, across every source at once.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering/cleaning/search work identically regardless of source. The same
