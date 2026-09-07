@@ -1324,13 +1324,93 @@ def _chatgpt_project_sessions(project: ProjectHandle) -> list[SessionHandle]:
     return handles
 
 
+def _chatgpt_asset_id(pointer: str) -> str:
+    """The file id inside an asset pointer.
+
+    Plain uploads are `sediment://file_abc` (or `file-service://file-abc`),
+    while a page rendered out of a PDF carries the parent's id in the middle:
+    `sediment://<hash>#file_abc#p_2.jpg`. Both resolve to `file_abc`, so the
+    source document is fetched once rather than once per page.
+    """
+    tail = (pointer or "").split("://", 1)[-1]
+    for segment in tail.split("#"):
+        if segment.startswith(("file_", "file-")):
+            return segment
+    return ""
+
+
+def _chatgpt_message_assets(message: dict) -> list[dict]:
+    """Files carried by one message: uploads live in `metadata.attachments`
+    with their real names, inline images only as asset pointers."""
+    assets, seen = [], set()
+    for attachment in (message.get("metadata") or {}).get("attachments") or []:
+        fid = attachment.get("id")
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        assets.append({"id": fid, "name": attachment.get("name") or fid,
+                       "mime": attachment.get("mime_type") or ""})
+    for part in (message.get("content") or {}).get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        fid = _chatgpt_asset_id(part.get("asset_pointer") or "")
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        assets.append({"id": fid, "name": fid, "mime": part.get("content_type") or ""})
+    return assets
+
+
+def _chatgpt_asset_path(account_dir: Path, asset: dict) -> Path:
+    """One file per id, keeping the original extension so it opens natively."""
+    suffix = Path(asset.get("name") or "").suffix
+    return account_dir / "assets" / f"{asset['id']}{suffix}"
+
+
+def _chatgpt_download_asset(session, account_dir: Path, asset: dict) -> str:
+    """Fetch one file: ask for a signed URL, then stream it with the same
+    session — the URL is served by chatgpt.com itself and stays cookie-gated.
+
+    Returns "cached", "saved", "missing" (aged out of ChatGPT's storage — a
+    permanent 404, not worth retrying) or "quota" (rate-limited, so a later
+    run can still get it). The two failures are kept apart so a spent quota
+    is never reported as data that no longer exists.
+    """
+    dest = _chatgpt_asset_path(account_dir, asset)
+    if dest.exists():
+        return "cached"
+    resp = _chatgpt_get_with_backoff(session, f"{CHATGPT_HOST}/backend-api/files/{asset['id']}/download")
+    if resp is None:
+        return "quota"
+    if resp.status_code == 404:
+        return "missing"
+    if resp.status_code != 200:
+        return "missing"
+    url = (resp.json() or {}).get("download_url")
+    if not url:
+        return "missing"
+    blob = _chatgpt_get_with_backoff(session, url, timeout=120)
+    if blob is None:
+        return "quota"
+    if blob.status_code != 200:
+        return "missing"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(blob.content)
+    return "saved"
+
+
 def _chatgpt_clean(text: str) -> str:
     text = _CHATGPT_PUA_RE.sub("", text)
     return _CHATGPT_PUA_STRAY_RE.sub("", text)
 
 
-def _chatgpt_blocks(content: dict) -> list[dict]:
-    """One ChatGPT message body as this CLI's content blocks."""
+def _chatgpt_blocks(content: dict, names: dict[str, str] | None = None) -> list[dict]:
+    """One ChatGPT message body as this CLI's content blocks.
+
+    `names` maps a file id to its uploaded filename, so an attached image or
+    PDF reads as itself rather than as an opaque part type.
+    """
+    names = names or {}
     kind = content.get("content_type")
     if kind == "text":
         text = "\n".join(p for p in (content.get("parts") or []) if isinstance(p, str))
@@ -1343,7 +1423,9 @@ def _chatgpt_blocks(content: dict) -> list[dict]:
             elif isinstance(part, dict) and part.get("text"):
                 out.append(part["text"])
             elif isinstance(part, dict) and part.get("content_type"):
-                out.append(f"[{part['content_type']}]")
+                fid = _chatgpt_asset_id(part.get("asset_pointer") or "")
+                label = names.get(fid) or fid or part["content_type"]
+                out.append(f"[{part['content_type']}: {label}]" if fid else f"[{part['content_type']}]")
         return [{"type": "text", "text": _chatgpt_clean("\n".join(out))}]
     if kind == "code":
         # A tool invocation: the model's call, addressed to `recipient`.
@@ -1393,7 +1475,14 @@ def _chatgpt_iter_turns(path: Path) -> list[Turn]:
         role = (message.get("author") or {}).get("role") or "user"
         if role == "system":
             continue  # hidden context the user never wrote or read
-        blocks = _chatgpt_blocks(message.get("content") or {})
+        names = {a["id"]: a["name"] for a in _chatgpt_message_assets(message)}
+        blocks = [b for b in _chatgpt_blocks(message.get("content") or {}, names)
+                  if b.get("text") or b.get("thinking") or b.get("input") or b.get("content")]
+        # An upload with no prose of its own still belongs in the transcript,
+        # and its filename is the only thing left to show.
+        if not blocks and names:
+            blocks = [{"type": "text",
+                       "text": "\n".join(f"[attachment: {n}]" for n in names.values())}]
         if not blocks:
             continue
         created = message.get("create_time") or doc.get("create_time") or 0
@@ -1402,7 +1491,7 @@ def _chatgpt_iter_turns(path: Path) -> list[Turn]:
     return turns
 
 
-def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, progress=None) -> dict:
+def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, assets: bool = False, progress=None) -> dict:
     """Pull one account's conversation list and bodies into the cache."""
     session, account_id = auth["session"], auth["account_id"]
     account_dir = _chatgpt_account_dir(account_id)
@@ -1430,6 +1519,7 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, progress=None) 
             offset += len(items)
 
     fetched = skipped = quota_spent = 0
+    saved_assets = missing_assets = blocked_assets = 0
     for item in listed:
         cid = item.get("id")
         if not cid:
@@ -1463,11 +1553,23 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, progress=None) 
         doc["title"] = doc.get("title") or item.get("title")
         dest.write_text(json.dumps(doc, ensure_ascii=False))
         fetched += 1
+        if assets:
+            for message in (n.get("message") for n in (doc.get("mapping") or {}).values()):
+                for asset in _chatgpt_message_assets(message or {}):
+                    outcome = _chatgpt_download_asset(session, account_dir, asset)
+                    if outcome == "saved":
+                        saved_assets += 1
+                    elif outcome == "missing":
+                        missing_assets += 1
+                    elif outcome == "quota":
+                        blocked_assets += 1
 
     _chatgpt_write_account(account_dir, auth)
     remaining = len(listed) - fetched - skipped
     return {"listed": len(listed), "fetched": fetched, "skipped": skipped,
-            "remaining": max(remaining, 0)}
+            "remaining": max(remaining, 0),
+            "assets": saved_assets, "assets_missing": missing_assets,
+            "assets_blocked": blocked_assets}
 
 
 def _chatgpt_write_account(account_dir: Path, auth: dict) -> None:
@@ -1487,17 +1589,24 @@ _CHATGPT_BACKOFF = (5, 15, 45)
 _CHATGPT_GIVE_UP_AFTER = 3  # consecutive exhausted conversations end the run
 
 
-def _chatgpt_get_conversation(session, cid: str):
-    """One conversation body, or None once the quota is exhausted for it."""
+def _chatgpt_get_with_backoff(session, url: str, timeout: int = 60):
+    """GET `url`, retrying only what a wait can fix. Returns the response —
+    including a permanent error like 404 — or None once the quota outlasts
+    the backoff schedule, which the caller must not read as "no such thing".
+    """
     for pause in _CHATGPT_BACKOFF:
-        resp = session.get(f"{CHATGPT_HOST}/backend-api/conversation/{cid}", timeout=60)
-        if resp.status_code == 200:
-            return resp
+        resp = session.get(url, timeout=timeout)
         if resp.status_code not in (429, 500, 502, 503, 504):
-            return None
+            return resp
         time.sleep(pause)
-    resp = session.get(f"{CHATGPT_HOST}/backend-api/conversation/{cid}", timeout=60)
-    return resp if resp.status_code == 200 else None
+    resp = session.get(url, timeout=timeout)
+    return None if resp.status_code in (429, 500, 502, 503, 504) else resp
+
+
+def _chatgpt_get_conversation(session, cid: str):
+    """One conversation body, or None when it cannot be had this run."""
+    resp = _chatgpt_get_with_backoff(session, f"{CHATGPT_HOST}/backend-api/conversation/{cid}")
+    return resp if resp is not None and resp.status_code == 200 else None
 
 
 def _chatgpt_epoch(value) -> float:
@@ -2835,9 +2944,11 @@ def chatgpt_accounts(as_json: bool) -> None:
 @chatgpt_group.command("sync")
 @click.option("--limit", default=1000, help="Most recent conversations to consider per account.")
 @click.option("--refresh", is_flag=True, help="Refetch bodies even when the cached copy is current.")
+@click.option("--assets", is_flag=True,
+              help="Also download attached images/PDFs/audio (slower: each file costs extra requests).")
 @click.option("--account", "account_filter", default=None, help="Only this account id or email.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
-def chatgpt_sync(limit: int, refresh: bool, account_filter: str | None, as_json: bool) -> None:
+def chatgpt_sync(limit: int, refresh: bool, assets: bool, account_filter: str | None, as_json: bool) -> None:
     """Pull chatgpt.com conversations into the local cache, per signed-in account.
 
     Reads the session straight out of a local Chromium profile, so there is
@@ -2851,13 +2962,21 @@ def chatgpt_sync(limit: int, refresh: bool, account_filter: str | None, as_json:
             click.echo(f"  [{done}/{total}] {_email}: {title[:60]}", err=True)
 
         stats = _chatgpt_sync_account(
-            auth, limit=limit, refresh=refresh, progress=None if as_json else progress
+            auth, limit=limit, refresh=refresh, assets=assets,
+            progress=None if as_json else progress,
         )
         stats.update(account_id=auth["account_id"], email=auth["email"], profile=auth["profile"])
         results.append(stats)
         if not as_json:
-            click.echo(f"{auth['email']}: {stats['listed']} listed, "
-                       f"{stats['fetched']} fetched, {stats['skipped']} unchanged")
+            line = (f"{auth['email']}: {stats['listed']} listed, "
+                    f"{stats['fetched']} fetched, {stats['skipped']} unchanged")
+            if assets:
+                line += f", {stats['assets']} files saved"
+                if stats["assets_missing"]:
+                    line += f", {stats['assets_missing']} gone from chatgpt.com"
+                if stats["assets_blocked"]:
+                    line += f", {stats['assets_blocked']} rate-limited (retry later)"
+            click.echo(line)
             if stats["remaining"]:
                 click.echo(
                     f"  {stats['remaining']} not fetched — chatgpt.com's quota is spent. "

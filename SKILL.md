@@ -234,7 +234,7 @@ unread (nothing has ever been marked read yet) — run `unread --mark-all-read`
 once to start clean, then normal usage keeps it current. `chats` shows a
 per-project unread count and bare `read` prefixes unread rows with `●`.
 
-### `agent-conv chatgpt sync [--limit N] [--refresh] [--account ID|EMAIL] [--json]`
+### `agent-conv chatgpt sync [--limit N] [--refresh] [--assets] [--account ID|EMAIL] [--json]`
 
 **ChatGPT only** — the other four sources write transcripts to disk, so they
 are read live; chatgpt.com keeps nothing locally, so its chats have to be
@@ -258,6 +258,17 @@ agent-conv chatgpt sync --account me@gmail.com # just one
 agent-conv chatgpt sync --refresh              # refetch bodies even when unchanged
 agent-conv read "chatgpt:me@gmail.com"         # then read it like any other channel
 ```
+
+**Attachments.** Uploads and inline images are always named in the transcript
+from their original filename (`[image_asset_pointer: pfp.jpeg]`), and a
+message that is nothing but an upload still renders as a turn. The files
+themselves are only downloaded with `--assets`, which writes them to
+`<account>/assets/<file_id><ext>` — off by default because every file costs
+two more requests against the same tight quota. Downloads are deduplicated by
+file id, so each page of a scanned PDF resolves back to one fetch of the
+source document. Older attachments are frequently gone from ChatGPT's storage
+(a permanent 404); sync counts those separately from files a spent quota only
+deferred, so "gone" never hides "try again later".
 
 **Expect to run sync more than once on a big history.** chatgpt.com allows
 only a couple of conversation reads back-to-back and then answers `429` until

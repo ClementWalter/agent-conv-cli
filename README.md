@@ -74,6 +74,11 @@ threads.
   chatgpt.com rate-limits conversation reads as a quota rather than a pace, so
   sync backs off, then stops and reports what it could not fetch instead of
   dropping it silently — re-running skips what is cached and resumes.
+  Attachments (images, PDFs, voice notes) are named in the transcript from
+  their upload filename; `--assets` also downloads the files themselves into
+  `<account>/assets/`, deduplicated by file id so a multi-page PDF is fetched
+  once. Files old enough to have aged out of ChatGPT's storage are reported
+  as gone, separately from ones a spent quota merely deferred.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering/cleaning/search work identically regardless of source. The same

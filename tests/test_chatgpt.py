@@ -258,3 +258,89 @@ def test_sync_keeps_whatever_it_managed_to_fetch(quota_blocked_sync) -> None:
 
 def test_an_interrupted_sync_still_leaves_a_readable_account(quota_blocked_sync, tmp_path: Path) -> None:
     assert json.loads((tmp_path / "acc-1" / "account.json").read_text())["email"] == "me@example.com"
+
+
+@pytest.mark.parametrize(
+    ("pointer", "expected"),
+    [
+        ("sediment://file_00000000676472469a36e613edb1e2dd", "file_00000000676472469a36e613edb1e2dd"),
+        # a page rendered out of a PDF hides the parent id in the middle segment
+        ("sediment://f9012489aad892d#file_00000000df7c72#p_2.jpg", "file_00000000df7c72"),
+        ("file-service://file-abc123", "file-abc123"),
+        ("sediment://nothing-here", ""),
+        ("", ""),
+    ],
+)
+def test_asset_pointer_resolves_to_its_file_id(pointer: str, expected: str) -> None:
+    assert ac._chatgpt_asset_id(pointer) == expected
+
+
+def test_every_page_of_one_pdf_resolves_to_a_single_download() -> None:
+    """Otherwise a 40-page PDF would be fetched 40 times."""
+    message = {"content": {"content_type": "multimodal_text", "parts": [
+        {"content_type": "image_asset_pointer", "asset_pointer": "sediment://h1#file_doc#p_1.jpg"},
+        {"content_type": "image_asset_pointer", "asset_pointer": "sediment://h2#file_doc#p_2.jpg"},
+    ]}}
+    assert [a["id"] for a in ac._chatgpt_message_assets(message)] == ["file_doc"]
+
+
+def test_an_upload_keeps_its_real_filename() -> None:
+    message = {"metadata": {"attachments": [{"id": "file_1", "name": "Contrat.pdf", "mime_type": "application/pdf"}]}}
+    assert ac._chatgpt_message_assets(message)[0]["name"] == "Contrat.pdf"
+
+
+def test_an_inline_image_is_labelled_by_its_filename() -> None:
+    content = {"content_type": "multimodal_text", "parts": [
+        {"content_type": "image_asset_pointer", "asset_pointer": "sediment://file_1"}]}
+    assert ac._chatgpt_blocks(content, {"file_1": "pfp.jpeg"})[0]["text"] == "[image_asset_pointer: pfp.jpeg]"
+
+
+def test_a_message_that_is_only_an_upload_still_becomes_a_turn(tmp_path: Path) -> None:
+    """A bare attachment carries no prose, but dropping it loses the exchange."""
+    path = tmp_path / "upload.json"
+    path.write_text(json.dumps({
+        "current_node": "n1",
+        "mapping": {"n1": {"id": "n1", "parent": None, "children": [], "message": {
+            "author": {"role": "user"}, "create_time": 1.0,
+            "metadata": {"attachments": [{"id": "file_1", "name": "scan.pdf"}]},
+            "content": {"content_type": "text", "parts": [""]}}}},
+    }))
+    assert ac._chatgpt_iter_turns(path)[0].blocks[0]["text"] == "[attachment: scan.pdf]"
+
+
+@pytest.fixture
+def asset() -> dict:
+    return {"id": "file_1", "name": "photo.jpeg", "mime": "image/jpeg"}
+
+
+def test_an_already_downloaded_file_is_not_refetched(tmp_path: Path, asset: dict) -> None:
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "file_1.jpeg").write_bytes(b"x")
+    session = _StubSession([])
+    ac._chatgpt_download_asset(session, tmp_path, asset)
+    assert session.calls == 0
+
+
+def test_a_downloaded_file_lands_on_disk(tmp_path: Path, asset: dict) -> None:
+    session = _StubSession([])
+    session.get = lambda url, timeout=0: (  # noqa: E731 - two-hop download stub
+        _StubJson({"download_url": "https://chatgpt.com/backend-api/estuary/content?sig=x"})
+        if "/download" in url else _StubBytes(b"\xff\xd8\xff-jpeg-bytes")
+    )
+    ac._chatgpt_download_asset(session, tmp_path, asset)
+    assert (tmp_path / "assets" / "file_1.jpeg").read_bytes() == b"\xff\xd8\xff-jpeg-bytes"
+
+
+def test_a_file_gone_from_chatgpt_is_reported_missing(tmp_path: Path, asset: dict) -> None:
+    assert ac._chatgpt_download_asset(_StubSession([404]), tmp_path, asset) == "missing"
+
+
+def test_a_rate_limited_file_is_not_reported_as_gone(tmp_path: Path, asset: dict) -> None:
+    """Conflating the two would tell the user their data no longer exists."""
+    assert ac._chatgpt_download_asset(_StubSession([429] * 10), tmp_path, asset) == "quota"
+
+
+class _StubBytes(_StubResponse):
+    def __init__(self, content: bytes) -> None:
+        super().__init__(200)
+        self.content = content
