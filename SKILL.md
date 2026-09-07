@@ -1,9 +1,9 @@
 ---
 name: agent-conv-cli
 description:
-  "Read your own local Claude Code / Codex CLI / Cursor / Oh My Pi conversation history
-  from the terminal via the bundled `agent-conv` command — one unified
-  reader across all four. Same shape as Slack, one level up: a project is a
+  "Read your own Claude Code / Codex CLI / Cursor / Oh My Pi / ChatGPT web conversation
+  history from the terminal via the bundled `agent-conv` command — one unified
+  reader across all five. Same shape as Slack, one level up: a project is a
   channel, a session IS a thread. `agent-conv chats` lists projects/channels
   across every source, most recently active first, tagged. `agent-conv read
   <query>` mirrors Slack's `read <channel>`: bare, it lists every thread's
@@ -12,8 +12,12 @@ description:
   one real directory merges every source's threads for it into one list.
   `agent-conv thread <query>` mirrors Slack's `thread <channel> <ts>`: reads
   exactly one thread in full (defaults to the most recent; `--nth`/`--session`
-  to pick another). `--source claude|codex|cursor|omp` scopes any command to one
-  backend. `agent-conv search <text>` full-text-searches across everything;
+  to pick another). `--source claude|codex|cursor|omp|chatgpt` scopes any command to one
+  backend. `agent-conv chatgpt sync` pulls chatgpt.com web chats into a local
+  cache (there is no local store to read, and no login: the session is read
+  out of a local Chromium profile); every other command then reads that cache
+  offline. Multi-account is native — each signed-in browser profile is swept
+  and cached separately under `chatgpt:<email>`. `agent-conv search <text>` full-text-searches across everything;
   `agent-conv find <text>` locates a thread by its derived title (name)
   across every project. `agent-conv fork <query>` hands off to `claude
   --resume --fork-session` to continue a past Claude Code thread as a new one
@@ -82,7 +86,7 @@ ln -sfn <skill-dir>/bin/agent-conv ~/.local/bin/agent-conv
 Same shape as Slack, one level up: a **project** (the directory an agent ran
 in) is a **channel**, and a **session** IS a **thread** — an anchor message
 (its first turn) plus every turn tied to it. The command set mirrors Slack's
-exactly, across all four sources at once:
+exactly, across all five sources at once:
 
 | Slack | agent-conv-cli |
 |---|---|
@@ -94,7 +98,8 @@ exactly, across all four sources at once:
 | *(no equivalent)* | `find <text>` — locate a thread by its title across every project |
 | *(no equivalent)* | `fork` / `send` — continue a Claude Code thread, live or headless |
 | *(no equivalent)* | `unread` — read/unread tracking, native for Cursor, local bookkeeping for Claude Code/Codex |
-| *(no equivalent)* | `--source claude\|codex\|cursor\|omp` — scope any command to one backend |
+| *(no equivalent)* | `--source claude\|codex\|cursor\|omp\|chatgpt` — scope any command to one backend |
+| *(no equivalent)* | `chatgpt sync` — pull chatgpt.com web chats into the local cache |
 
 Unlike Slack, there's no "loose message outside any thread" case — every turn
 belongs to exactly one session, so a project has nothing to show beyond its
@@ -228,6 +233,39 @@ The first run will likely show your whole Claude Code/Codex history as
 unread (nothing has ever been marked read yet) — run `unread --mark-all-read`
 once to start clean, then normal usage keeps it current. `chats` shows a
 per-project unread count and bare `read` prefixes unread rows with `●`.
+
+### `agent-conv chatgpt sync [--limit N] [--refresh] [--account ID|EMAIL] [--json]`
+
+**ChatGPT only** — the other four sources write transcripts to disk, so they
+are read live; chatgpt.com keeps nothing locally, so its chats have to be
+pulled first. Sync writes them to `~/.cache/agent-conv-cli/chatgpt/<account>/`
+(override with `$AGENT_CONV_CHATGPT_CACHE`), and every other command reads
+that cache — offline, and with no browser needed.
+
+There is nothing to log into. The session is read straight out of a local
+Chromium profile's cookie store (Chrome/Arc/Brave/Edge, decrypted with the
+macOS keychain key), the same trick `notion-cli` and `rentalready-cli` use. So
+**sign in to chatgpt.com in a browser first**; sync follows.
+
+Multi-account is native: every signed-in profile is swept, so a work and a
+personal account sync side by side into separate caches. An account already
+synced stays readable after you sign out of it — the cache is the history.
+
+```bash
+agent-conv chatgpt accounts                    # who is cached / who is signed in where
+agent-conv chatgpt sync                        # every signed-in account
+agent-conv chatgpt sync --account me@gmail.com # just one
+agent-conv chatgpt sync --refresh              # refetch bodies even when unchanged
+agent-conv read "chatgpt:me@gmail.com"         # then read it like any other channel
+```
+
+**Expect to run sync more than once on a big history.** chatgpt.com allows
+only a couple of conversation reads back-to-back and then answers `429` until
+its window rolls over. Sync backs off and retries, but once the quota is spent
+it stops and tells you how many are left rather than silently dropping them.
+Re-running skips everything already cached, so each run resumes where the last
+one stopped. Incremental syncs are cheap: a conversation is refetched only
+when its server-side `update_time` moved.
 
 ### `agent-conv skill-usage [--since-days N] [--recent N] [--json]`
 

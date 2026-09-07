@@ -1,7 +1,7 @@
 # agent-conv-cli
 
-Terminal access to your **own** Claude Code, Codex CLI, Cursor, and Oh My Pi
-conversation history — one reader across all four, read-only:
+Terminal access to your **own** Claude Code, Codex CLI, Cursor, Oh My Pi, and
+ChatGPT web conversation history — one reader across all five, read-only:
 
 ```bash
 agent-conv chats                        # projects (channels) across every source, most recent first
@@ -13,6 +13,8 @@ agent-conv find "deploy-checklist"       # find a thread by name (its derived ti
 agent-conv fork "myproject" --yes        # continue a past Claude Code thread interactively, as a new one
 agent-conv send "myproject" "..." --yes  # send a message into a Claude Code thread headlessly, print the reply
 agent-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
+agent-conv chatgpt sync                  # pull chatgpt.com web chats into the local cache
+agent-conv chatgpt accounts              # which ChatGPT accounts are cached / signed in
 agent-conv unread                        # what's new since you last viewed it
 agent-conv skill-usage                   # every Skill-tool invocation ever, count + last used (Claude Code only)
 ```
@@ -34,7 +36,7 @@ Unlike Slack, there's no "loose message outside any thread" — every turn
 belongs to some session, so a project has nothing to show beyond its
 threads.
 
-## Four sources, one model
+## Five sources, one model
 
 - **Claude Code** — `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`, one
   JSON-lines file per session (Anthropic Messages API shape).
@@ -55,6 +57,20 @@ threads.
   (override with `$OMP_HOME`). Each file starts with a `session` event carrying
   the real `cwd`, session id, and stored title; this CLI groups by that cwd.
   Unread is local bookkeeping, same as Claude Code/Codex.
+- **ChatGPT web** — chatgpt.com has no local transcript store, so this is the
+  one source that syncs: `agent-conv chatgpt sync` pulls conversations into
+  `~/.cache/agent-conv-cli/chatgpt/<account>/` (override with
+  `$AGENT_CONV_CHATGPT_CACHE`) and every read command works off that cache, so
+  `chats`/`read`/`search` stay offline and fast like the rest. There is nothing
+  to log into: the session is read straight out of a local Chromium profile's
+  cookie store (Chrome/Arc/Brave/Edge, decrypted with the macOS keychain key),
+  exactly as `notion-cli` and `rentalready-cli` do. Multi-account is native —
+  every signed-in profile is swept, each account caches separately, and an
+  account already synced stays readable after you sign out of it. A ChatGPT
+  conversation is a *tree* (every regenerate forks a branch), so only the path
+  from `current_node` back to the root — the conversation as you last saw it —
+  is rendered. Since there is no `cwd`, the channel is the account:
+  `chatgpt:<email>`.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering/cleaning/search work identically regardless of source. The same
@@ -62,13 +78,15 @@ real directory often shows up under more than one source (you `cd` into a
 repo and reach for whichever agent fits) — `chats` lists each `(source,
 project)` pair as its own row, but a query that exactly names one real
 directory merges every source's threads for it into one recency-sorted list
-in `read`/`thread`/`search`/`find`/`unread`. `--source claude|codex|cursor|omp`
-narrows any of them back to one backend.
+in `read`/`thread`/`search`/`find`/`unread`.
+`--source claude|codex|cursor|omp|chatgpt` narrows any of them back to one
+backend.
 
 ## Prerequisites
 
 Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) — it runs the
-script and resolves its one dependency (`click`) on demand:
+script and resolves its dependencies (`click`, plus `curl_cffi` and
+`pycryptodome` for the ChatGPT sync) on demand:
 
 ```bash
 # macOS / Linux

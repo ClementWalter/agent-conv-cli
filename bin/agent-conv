@@ -3,6 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "click==8.3.3",
+#     "curl_cffi==0.13.0",
+#     "pycryptodome==3.23.0",
 # ]
 # ///
 """Read your own local Claude Code / Codex CLI / Cursor / Oh My Pi conversation history.
@@ -75,6 +77,9 @@ like the personal-messaging CLIs' `send` commands do.
 
 from __future__ import annotations
 
+import glob
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -85,6 +90,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import time
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -104,7 +110,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("agent-conv")
 
-SOURCES = ("claude", "codex", "cursor", "omp", "corpus")
+SOURCES = ("claude", "codex", "cursor", "omp", "chatgpt", "corpus")
 
 CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
 PROJECTS_DIR = CLAUDE_HOME / "projects"
@@ -1094,6 +1100,419 @@ def _omp_session_tokens(path: Path) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# ChatGPT web (chatgpt.com) — synced to a local cache, then read like any
+# other source
+# ---------------------------------------------------------------------------
+
+# chatgpt.com has no local transcript store, so this source is a two-step:
+# `chatgpt sync` pulls conversations over the web API into CHATGPT_CACHE, and
+# every read command works off that cache — so `chats`/`read`/`search` stay
+# offline and fast, exactly like the file-backed sources.
+CHATGPT_CACHE = Path(
+    os.environ.get("AGENT_CONV_CHATGPT_CACHE", str(Path.home() / ".cache" / "agent-conv-cli" / "chatgpt"))
+)
+CHATGPT_HOST = "https://chatgpt.com"
+CHATGPT_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+)
+
+# Chromium cookie stores this CLI knows how to open, as
+# (label, glob of the cookie sqlite, keychain service holding the AES key).
+CHATGPT_COOKIE_SOURCES = [
+    ("chrome", "~/Library/Application Support/Google/Chrome/*/Cookies", "Chrome Safe Storage"),
+    ("arc", "~/Library/Application Support/Arc/User Data/*/Cookies", "Arc Safe Storage"),
+    ("brave", "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Cookies", "Brave Safe Storage"),
+    ("edge", "~/Library/Application Support/Microsoft Edge/*/Cookies", "Microsoft Edge Safe Storage"),
+    ("chromium", "~/Library/Application Support/Chromium/*/Cookies", "Chromium Safe Storage"),
+]
+
+# ChatGPT wraps inline render directives in private-use codepoints:
+# <kind><json>. They carry no prose, so they're stripped.
+_CHATGPT_PUA_RE = re.compile("\ue200.*?\ue201", re.DOTALL)
+_CHATGPT_PUA_STRAY_RE = re.compile("[\ue200-\ue206]")
+
+
+def _chatgpt_keychain_key(service: str) -> bytes | None:
+    """The AES key Chromium derives from its keychain secret on macOS."""
+    try:
+        from Crypto.Protocol.KDF import PBKDF2
+    except ImportError:
+        return None
+    try:
+        proc = subprocess.run(
+            ["security", "find-generic-password", "-w", "-s", service],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return PBKDF2(
+        proc.stdout.strip().encode(), b"saltysalt", 16, count=1003,
+        prf=lambda p, s: hmac.new(p, s, hashlib.sha1).digest(),
+    )
+
+
+def _chatgpt_decrypt_cookie(encrypted: bytes, key: bytes) -> str | None:
+    """Decrypt one Chromium `v10`/`v11` AES-CBC cookie value."""
+    if not encrypted or encrypted[:3] not in (b"v10", b"v11"):
+        return None
+    try:
+        from Crypto.Cipher import AES
+    except ImportError:
+        return None
+    try:
+        dec = AES.new(key, AES.MODE_CBC, iv=b" " * 16).decrypt(encrypted[3:])
+        dec = dec[: -dec[-1]]  # strip PKCS7 padding
+        try:
+            return dec.decode()
+        except UnicodeDecodeError:
+            return dec[32:].decode(errors="replace")  # Chrome >= M118 sha256(domain) prefix
+    except (ValueError, IndexError):
+        return None
+
+
+def _chatgpt_cookie_jars():
+    """Yield (profile_label, cookie dict) for every local Chromium profile
+    holding chatgpt.com cookies."""
+    keys: dict[str, bytes | None] = {}
+    for label, pattern, service in CHATGPT_COOKIE_SOURCES:
+        for store in sorted(glob.glob(str(Path(pattern).expanduser()))):
+            if service not in keys:
+                keys[service] = _chatgpt_keychain_key(service)
+            key = keys[service]
+            if not key:
+                continue
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td) / "Cookies"
+                try:
+                    shutil.copy2(store, tmp)  # the live db is locked by the browser
+                    con = sqlite3.connect(f"file:{tmp}?immutable=1", uri=True)
+                    rows = con.execute(
+                        "SELECT name, encrypted_value FROM cookies "
+                        "WHERE host_key IN ('chatgpt.com', '.chatgpt.com')"
+                    ).fetchall()
+                    con.close()
+                except (OSError, sqlite3.Error):
+                    continue
+            jar: dict[str, str] = {}
+            for name, enc in rows:
+                value = _chatgpt_decrypt_cookie(bytes(enc), key)
+                if value is not None:
+                    jar[name] = value
+            # next-auth splits a long session JWE across `.0`/`.1`/… cookies;
+            # the server accepts only the reassembled one, never both forms.
+            chunks = sorted(k for k in jar if k.startswith("__Secure-next-auth.session-token."))
+            if chunks:
+                jar["__Secure-next-auth.session-token"] = "".join(jar[k] for k in chunks)
+                for k in chunks:
+                    jar.pop(k)
+            if jar.get("__Secure-next-auth.session-token"):
+                yield f"{label}/{Path(store).parent.name}", jar
+
+
+def _chatgpt_client(jar: dict[str, str]):
+    """A session that reproduces the browser closely enough to pass the WAF:
+    Chrome's TLS fingerprint (curl_cffi) plus its cookies and headers."""
+    try:
+        from curl_cffi import requests as curl_requests
+    except ImportError:
+        raise click.ClickException(
+            "chatgpt sync needs `curl_cffi` — plain HTTP clients are refused by chatgpt.com's WAF."
+        )
+    session = curl_requests.Session(impersonate="chrome")
+    session.headers.update({
+        "User-Agent": CHATGPT_UA,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": f"{CHATGPT_HOST}/",
+        "Cookie": "; ".join(f"{k}={v}" for k, v in jar.items()),
+    })
+    return session
+
+
+def _chatgpt_authenticate(jar: dict[str, str]) -> dict | None:
+    """Trade the browser session cookie for the bearer token the API wants.
+    Returns None when that profile is signed out."""
+    session = _chatgpt_client(jar)
+    try:
+        payload = session.get(f"{CHATGPT_HOST}/api/auth/session", timeout=30).json()
+    except Exception:
+        return None
+    token = payload.get("accessToken")
+    if not token:
+        return None
+    account = payload.get("account") or {}
+    session.headers["Authorization"] = f"Bearer {token}"
+    account_id = account.get("id")
+    if account_id:
+        session.headers["ChatGPT-Account-ID"] = account_id
+    return {
+        "session": session,
+        "account_id": account_id,
+        "email": (payload.get("user") or {}).get("email") or "",
+        "plan": account.get("planType") or "",
+        "structure": account.get("structure") or "",
+    }
+
+
+def _chatgpt_accounts():
+    """Every signed-in ChatGPT account reachable from a local browser profile."""
+    seen: set[str] = set()
+    for label, jar in _chatgpt_cookie_jars():
+        auth = _chatgpt_authenticate(jar)
+        if not auth or not auth["account_id"] or auth["account_id"] in seen:
+            continue
+        seen.add(auth["account_id"])
+        auth["profile"] = label
+        yield auth
+
+
+def _chatgpt_account_dir(account_id: str) -> Path:
+    return CHATGPT_CACHE / account_id
+
+
+def _chatgpt_cached_accounts() -> list[dict]:
+    """Accounts already synced to disk — readable with no network and no
+    browser session, so history stays available per account."""
+    out = []
+    if not CHATGPT_CACHE.is_dir():
+        return out
+    for meta_path in sorted(CHATGPT_CACHE.glob("*/account.json")):
+        try:
+            out.append(json.loads(meta_path.read_text()))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _chatgpt_project_cwd(meta: dict) -> str:
+    """ChatGPT has no working directory, so the account is the channel."""
+    return f"chatgpt:{meta.get('email') or meta.get('account_id')}"
+
+
+def _chatgpt_conv_files(account_id: str) -> list[Path]:
+    return sorted((_chatgpt_account_dir(account_id) / "conv").glob("*.json"))
+
+
+def _chatgpt_iter_projects():
+    for meta in _chatgpt_cached_accounts():
+        if not _chatgpt_conv_files(meta.get("account_id") or ""):
+            continue
+        yield ProjectHandle(source="chatgpt", cwd=_chatgpt_project_cwd(meta), key=meta["account_id"])
+
+
+def _chatgpt_project_sessions(project: ProjectHandle) -> list[SessionHandle]:
+    handles = []
+    for path in _chatgpt_conv_files(project.key):
+        try:
+            doc = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        handles.append(
+            SessionHandle(
+                source="chatgpt",
+                uuid=doc.get("conversation_id") or path.stem,
+                project_cwd=project.cwd,
+                mtime=float(doc.get("update_time") or path.stat().st_mtime),
+                path=path,
+                title_hint=doc.get("title"),
+            )
+        )
+    handles.sort(key=lambda h: h.mtime, reverse=True)
+    return handles
+
+
+def _chatgpt_clean(text: str) -> str:
+    text = _CHATGPT_PUA_RE.sub("", text)
+    return _CHATGPT_PUA_STRAY_RE.sub("", text)
+
+
+def _chatgpt_blocks(content: dict) -> list[dict]:
+    """One ChatGPT message body as this CLI's content blocks."""
+    kind = content.get("content_type")
+    if kind == "text":
+        text = "\n".join(p for p in (content.get("parts") or []) if isinstance(p, str))
+        return [{"type": "text", "text": _chatgpt_clean(text)}]
+    if kind == "multimodal_text":
+        out = []
+        for part in content.get("parts") or []:
+            if isinstance(part, str):
+                out.append(part)
+            elif isinstance(part, dict) and part.get("text"):
+                out.append(part["text"])
+            elif isinstance(part, dict) and part.get("content_type"):
+                out.append(f"[{part['content_type']}]")
+        return [{"type": "text", "text": _chatgpt_clean("\n".join(out))}]
+    if kind == "code":
+        # A tool invocation: the model's call, addressed to `recipient`.
+        return [{"type": "tool_use", "name": content.get("language") or "code",
+                 "input": {"code": content.get("text") or ""}}]
+    if kind == "execution_output":
+        return [{"type": "tool_result", "content": content.get("text") or ""}]
+    if kind == "thoughts":
+        thoughts = content.get("thoughts") or []
+        text = "\n".join(
+            " ".join(filter(None, (t.get("summary"), t.get("content"))))
+            for t in thoughts if isinstance(t, dict)
+        )
+        return [{"type": "thinking", "thinking": text}]
+    if kind == "reasoning_recap":
+        return [{"type": "thinking", "thinking": content.get("content") or ""}]
+    return []
+
+
+def _chatgpt_iter_turns(path: Path) -> list[Turn]:
+    """Turns along the conversation's active branch.
+
+    A ChatGPT conversation is a tree — every regenerate/edit forks a new
+    branch — and only the path from `current_node` back to the root is the
+    conversation as the user last saw it.
+    """
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    mapping = doc.get("mapping") or {}
+    chain, node_id, guard = [], doc.get("current_node"), 0
+    while node_id and guard <= len(mapping):
+        node = mapping.get(node_id)
+        if not node:
+            break
+        chain.append(node)
+        node_id = node.get("parent")
+        guard += 1
+    chain.reverse()
+
+    turns = []
+    for node in chain:
+        message = node.get("message")
+        if not message:
+            continue
+        role = (message.get("author") or {}).get("role") or "user"
+        if role == "system":
+            continue  # hidden context the user never wrote or read
+        blocks = _chatgpt_blocks(message.get("content") or {})
+        if not blocks:
+            continue
+        created = message.get("create_time") or doc.get("create_time") or 0
+        ts = datetime.fromtimestamp(float(created), tz=timezone.utc).isoformat() if created else ""
+        turns.append(Turn(ts=ts, role="user" if role == "user" else "assistant", blocks=blocks))
+    return turns
+
+
+def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, progress=None) -> dict:
+    """Pull one account's conversation list and bodies into the cache."""
+    session, account_id = auth["session"], auth["account_id"]
+    account_dir = _chatgpt_account_dir(account_id)
+    (account_dir / "conv").mkdir(parents=True, exist_ok=True)
+    # Written before the bodies are fetched: an interrupted sync still leaves
+    # a readable account, and whatever it managed to pull stays usable.
+    _chatgpt_write_account(account_dir, auth)
+
+    listed: list[dict] = []
+    for archived in (False, True):
+        offset, page = 0, 100
+        while len(listed) < limit:
+            resp = session.get(
+                f"{CHATGPT_HOST}/backend-api/conversations",
+                params={"offset": offset, "limit": min(page, limit - len(listed)),
+                        "order": "updated", "is_archived": str(archived).lower()},
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                break
+            items = (resp.json() or {}).get("items") or []
+            if not items:
+                break
+            listed.extend(items)
+            offset += len(items)
+
+    fetched = skipped = rate_limited = 0
+    for item in listed:
+        cid = item.get("id")
+        if not cid:
+            continue
+        dest = account_dir / "conv" / f"{cid}.json"
+        # update_time is the server's own last-touch, so an unchanged
+        # conversation never needs refetching.
+        if not refresh and dest.exists():
+            try:
+                if float(json.loads(dest.read_text()).get("update_time") or 0) >= _chatgpt_epoch(item.get("update_time")):
+                    skipped += 1
+                    continue
+            except (OSError, ValueError):
+                pass
+        resp = _chatgpt_get_conversation(session, cid)
+        if resp is None:
+            rate_limited += 1
+            # The limit is a quota, not a pace: once it is exhausted no amount
+            # of waiting inside one run helps. Stop, keep what was fetched
+            # (the cache makes the next run resume), and say so.
+            if rate_limited >= _CHATGPT_GIVE_UP_AFTER:
+                break
+            continue
+        rate_limited = 0
+        if progress:
+            progress(fetched + skipped + 1, len(listed), item.get("title") or cid)
+        doc = resp.json()
+        doc["conversation_id"] = doc.get("conversation_id") or cid
+        # An untitled conversation carries an explicit null, so fall back to
+        # the listing's title rather than leaving the key present-but-empty.
+        doc["title"] = doc.get("title") or item.get("title")
+        dest.write_text(json.dumps(doc, ensure_ascii=False))
+        fetched += 1
+
+    _chatgpt_write_account(account_dir, auth)
+    remaining = len(listed) - fetched - skipped
+    return {"listed": len(listed), "fetched": fetched, "skipped": skipped,
+            "remaining": max(remaining, 0)}
+
+
+def _chatgpt_write_account(account_dir: Path, auth: dict) -> None:
+    (account_dir / "account.json").write_text(json.dumps({
+        "account_id": auth["account_id"],
+        "email": auth["email"],
+        "plan": auth["plan"],
+        "structure": auth["structure"],
+        "synced": datetime.now(timezone.utc).isoformat(),
+    }, ensure_ascii=False, indent=2))
+
+
+# chatgpt.com allows only a couple of conversation reads back-to-back and then
+# answers 429 until its window rolls over. Short pauses do not clear it, but a
+# long one does, so each body is retried on a widening backoff.
+_CHATGPT_BACKOFF = (5, 15, 45)
+_CHATGPT_GIVE_UP_AFTER = 3  # consecutive exhausted conversations end the run
+
+
+def _chatgpt_get_conversation(session, cid: str):
+    """One conversation body, or None once the quota is exhausted for it."""
+    for pause in _CHATGPT_BACKOFF:
+        resp = session.get(f"{CHATGPT_HOST}/backend-api/conversation/{cid}", timeout=60)
+        if resp.status_code == 200:
+            return resp
+        if resp.status_code not in (429, 500, 502, 503, 504):
+            return None
+        time.sleep(pause)
+    resp = session.get(f"{CHATGPT_HOST}/backend-api/conversation/{cid}", timeout=60)
+    return resp if resp.status_code == 200 else None
+
+
+def _chatgpt_epoch(value) -> float:
+    """ChatGPT returns epoch floats in bodies and ISO strings in listings."""
+    if value in (None, ""):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
 # Shared corpus (other machines + dedicated mouths)
 # ---------------------------------------------------------------------------
 
@@ -1254,6 +1673,8 @@ def _iter_all_projects(sources: tuple[str, ...]):
         yield from _cursor_iter_projects()
     if "omp" in sources:
         yield from _omp_iter_projects()
+    if "chatgpt" in sources:
+        yield from _chatgpt_iter_projects()
     if "corpus" in sources:
         yield from _corpus_iter_projects()
 
@@ -1267,6 +1688,8 @@ def _project_sessions(project: ProjectHandle) -> list[SessionHandle]:
         return _cursor_project_sessions(project)
     if project.source == "omp":
         return _omp_project_sessions(project)
+    if project.source == "chatgpt":
+        return _chatgpt_project_sessions(project)
     if project.source == "corpus":
         return _corpus_project_sessions(project)
     return []
@@ -1281,6 +1704,8 @@ def _handle_iter_turns(handle: SessionHandle, include_subagents: bool) -> list[T
         return _cursor_iter_turns(handle.composer_id)
     if handle.source == "omp":
         return list(_omp_iter_turns(handle.path))
+    if handle.source == "chatgpt":
+        return _chatgpt_iter_turns(handle.path)
     if handle.source == "corpus":
         return list(_corpus_iter_turns(handle.path))
     return []
@@ -1595,14 +2020,14 @@ def _print_handle_list(cwd_label: str, handles: list[SessionHandle], as_json: bo
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """Read Claude Code / Codex / Cursor / Oh My Pi / the shared corpus log."""
+    """Read Claude Code / Codex / Cursor / Oh My Pi / ChatGPT web / the shared corpus log."""
 
 
 _SOURCE_OPTION = click.option(
     "--source",
     "source_filter",
     type=click.Choice(SOURCES),
-    help="Restrict to one source (default: claude + codex + cursor + omp, all at once).",
+    help="Restrict to one source (default: claude + codex + cursor + omp + chatgpt, all at once).",
 )
 
 
@@ -2367,6 +2792,87 @@ def port(
     except FileNotFoundError:
         raise click.ClickException(f"`{cmd[0]}` not found on PATH.")
 
+
+
+@cli.group("chatgpt")
+def chatgpt_group() -> None:
+    """Sync and inspect chatgpt.com web chats (the only source with no local store)."""
+
+
+@chatgpt_group.command("accounts")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def chatgpt_accounts(as_json: bool) -> None:
+    """Show cached accounts, and which ones a browser profile can refresh."""
+    cached = {a.get("account_id"): a for a in _chatgpt_cached_accounts()}
+    live = {}
+    for auth in _chatgpt_accounts():
+        live[auth["account_id"]] = auth
+    rows = []
+    for account_id in dict.fromkeys(list(live) + list(cached)):
+        meta = cached.get(account_id, {})
+        auth = live.get(account_id)
+        rows.append({
+            "account_id": account_id,
+            "email": (auth or meta).get("email", ""),
+            "plan": (auth or meta).get("plan", ""),
+            "structure": (auth or meta).get("structure", ""),
+            "signed_in_profile": auth["profile"] if auth else None,
+            "cached_conversations": len(_chatgpt_conv_files(account_id)),
+            "last_synced": meta.get("synced"),
+        })
+    if as_json:
+        click.echo(json.dumps(rows, ensure_ascii=False))
+        return
+    if not rows:
+        click.echo("No ChatGPT account found: sign in to chatgpt.com in Chrome/Arc/Brave/Edge, then `agent-conv chatgpt sync`.")
+        return
+    for r in rows:
+        where = f"signed in via {r['signed_in_profile']}" if r["signed_in_profile"] else "cached only (signed out)"
+        click.echo(f"{r['email'] or r['account_id']}  [{r['plan']}/{r['structure']}]  "
+                   f"{r['cached_conversations']} cached  — {where}")
+
+
+@chatgpt_group.command("sync")
+@click.option("--limit", default=1000, help="Most recent conversations to consider per account.")
+@click.option("--refresh", is_flag=True, help="Refetch bodies even when the cached copy is current.")
+@click.option("--account", "account_filter", default=None, help="Only this account id or email.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def chatgpt_sync(limit: int, refresh: bool, account_filter: str | None, as_json: bool) -> None:
+    """Pull chatgpt.com conversations into the local cache, per signed-in account.
+
+    Reads the session straight out of a local Chromium profile, so there is
+    nothing to log into here. Every other command then works off the cache.
+    """
+    results = []
+    for auth in _chatgpt_accounts():
+        if account_filter and account_filter not in (auth["account_id"], auth["email"]):
+            continue
+        def progress(done: int, total: int, title: str, _email=auth["email"]) -> None:
+            click.echo(f"  [{done}/{total}] {_email}: {title[:60]}", err=True)
+
+        stats = _chatgpt_sync_account(
+            auth, limit=limit, refresh=refresh, progress=None if as_json else progress
+        )
+        stats.update(account_id=auth["account_id"], email=auth["email"], profile=auth["profile"])
+        results.append(stats)
+        if not as_json:
+            click.echo(f"{auth['email']}: {stats['listed']} listed, "
+                       f"{stats['fetched']} fetched, {stats['skipped']} unchanged")
+            if stats["remaining"]:
+                click.echo(
+                    f"  {stats['remaining']} not fetched — chatgpt.com's quota is spent. "
+                    f"Re-run `agent-conv chatgpt sync` later; cached conversations are skipped, "
+                    f"so it resumes where this stopped.",
+                    err=True,
+                )
+    if as_json:
+        click.echo(json.dumps(results, ensure_ascii=False))
+        return
+    if not results:
+        raise click.ClickException(
+            "No signed-in ChatGPT session found in any local browser profile. "
+            "Sign in to chatgpt.com in Chrome/Arc/Brave/Edge and retry."
+        )
 
 
 @cli.command("append")
