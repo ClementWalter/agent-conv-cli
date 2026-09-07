@@ -14,6 +14,7 @@ agent-conv fork "myproject" --yes        # continue a past Claude Code thread in
 agent-conv send "myproject" "..." --yes  # send a message into a Claude Code thread headlessly, print the reply
 agent-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
 agent-conv chatgpt sync                  # pull chatgpt.com web chats into the local cache
+agent-conv chatgpt sync --assets --until-complete  # full sync incl. attachments, over as many rounds as the quota needs
 agent-conv chatgpt accounts              # which ChatGPT accounts are cached / signed in
 agent-conv unread                        # what's new since you last viewed it
 agent-conv skill-usage                   # every Skill-tool invocation ever, count + last used (Claude Code only)
@@ -78,7 +79,9 @@ threads.
   their upload filename; `--assets` also downloads the files themselves into
   `<account>/assets/`, deduplicated by file id so a multi-page PDF is fetched
   once. Files old enough to have aged out of ChatGPT's storage are reported
-  as gone, separately from ones a spent quota merely deferred.
+  as gone, separately from ones a spent quota merely deferred. Because the
+  limit is a quota, a large history needs several passes — `--until-complete`
+  repeats them on a timer until nothing is outstanding.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering/cleaning/search work identically regardless of source. The same

@@ -234,7 +234,7 @@ unread (nothing has ever been marked read yet) — run `unread --mark-all-read`
 once to start clean, then normal usage keeps it current. `chats` shows a
 per-project unread count and bare `read` prefixes unread rows with `●`.
 
-### `agent-conv chatgpt sync [--limit N] [--refresh] [--assets] [--account ID|EMAIL] [--json]`
+### `agent-conv chatgpt sync [--limit N] [--refresh] [--assets] [--until-complete] [--wait SECS] [--max-rounds N] [--account ID|EMAIL] [--json]`
 
 **ChatGPT only** — the other four sources write transcripts to disk, so they
 are read live; chatgpt.com keeps nothing locally, so its chats have to be
@@ -270,13 +270,25 @@ source document. Older attachments are frequently gone from ChatGPT's storage
 (a permanent 404); sync counts those separately from files a spent quota only
 deferred, so "gone" never hides "try again later".
 
-**Expect to run sync more than once on a big history.** chatgpt.com allows
-only a couple of conversation reads back-to-back and then answers `429` until
-its window rolls over. Sync backs off and retries, but once the quota is spent
-it stops and tells you how many are left rather than silently dropping them.
-Re-running skips everything already cached, so each run resumes where the last
-one stopped. Incremental syncs are cheap: a conversation is refetched only
-when its server-side `update_time` moved.
+**Expect a big history to need many passes.** chatgpt.com allows only a
+couple of conversation reads back-to-back and then answers `429` until its
+window rolls over — it is a quota, not a pace, so slowing down does not help.
+Sync backs off and retries, then stops and reports how many are left rather
+than silently dropping them. Re-running skips everything already cached, so
+each pass resumes where the last stopped, and an unchanged conversation is
+never refetched (its server-side `update_time` decides).
+
+`--until-complete` does the re-running for you: it repeats the pass every
+`--wait` seconds (default 900) until nothing is outstanding, up to
+`--max-rounds`. Budget hours for a first full sync of a few hundred
+conversations. It re-authenticates each round, so a long run survives a stale
+token, and it treats files already gone from chatgpt.com as settled rather
+than retrying them forever. Interrupting it is safe — the cache is the
+progress.
+
+```bash
+agent-conv chatgpt sync --assets --until-complete   # the unattended full sync
+```
 
 ### `agent-conv skill-usage [--since-days N] [--recent N] [--json]`
 
