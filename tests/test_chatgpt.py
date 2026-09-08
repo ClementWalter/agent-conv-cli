@@ -149,7 +149,7 @@ class _StubResponse:
         self.status_code = status_code
 
     def json(self) -> dict:
-        return {}
+        return {"mapping": {}}
 
 
 class _StubSession:
@@ -195,6 +195,20 @@ def test_a_deleted_conversation_is_reported_missing() -> None:
     assert ac._chatgpt_fetch_conversation(_StubSession([404]), "c1")[0] == "missing"
 
 
+@pytest.mark.parametrize("status", [401, 403])
+def test_authorization_failure_is_not_reported_deleted(status):
+    from one_conv.providers.base import AuthenticationRequired
+    with pytest.raises(AuthenticationRequired):
+        ac._chatgpt_fetch_conversation(_StubSession([status]), "c1")
+
+
+def test_changed_conversation_shape_is_not_cached_as_success():
+    from one_conv.providers.base import SchemaChanged
+    session = _StubSearchSession([{"unexpected": "shape"}])
+    with pytest.raises(SchemaChanged):
+        ac._chatgpt_fetch_conversation(session, "c1")
+
+
 def test_giving_up_is_bounded_by_the_backoff_schedule() -> None:
     session = _StubSession([429] * 10)
     ac._chatgpt_fetch_conversation(session, "c1")
@@ -218,7 +232,7 @@ class _StubSyncSession:
         self.body_calls = 0
         self.headers: dict[str, str] = {}
 
-    def get(self, url: str, params: dict | None = None, timeout: int = 0):
+    def get(self, url: str, params: dict | None = None, timeout: int = 0, allow_redirects: bool = False):
         if "/backend-api/conversations" in url:
             if (params or {}).get("is_archived") == "true" or (params or {}).get("offset"):
                 return _StubJson({"items": []})

@@ -38,6 +38,12 @@ description:
 
 # Claude Code / Codex / Cursor / Oh My Pi conversation reader CLI
 
+Experimental cloud adapters are available through `one-conv cloud providers`
+and `one-conv cloud sync --help`. Read [PROVIDERS.md](PROVIDERS.md) before using
+them: Claude Chat and Codex current-task coverage is fixture-tested, Cowork is
+unsupported, and cloud login is not implemented. Managed sessions come from
+the caller; never present manual token copying as customer onboarding.
+
 Terminal access to your **own** conversation history across four coding
 agents by reading each one's local storage directly, read-only:
 

@@ -1,0 +1,216 @@
+"""Exercise cloud synchronization through persistence and the public CLI."""
+
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+from click.testing import CliRunner
+import pytest
+
+from one_conv.cloud import synchronize
+from one_conv.providers.base import (
+    Conversation, ConversationPage, ConversationSummary, Message,
+    ProviderAccount, SchemaChanged,
+)
+
+
+class ProviderStub:
+    """Expose controlled pages and failures at the provider boundary."""
+
+    def __init__(self, conversation, account="account-a", pages=None):
+        self.conversation = conversation
+        self.account = account
+        self.failure = None
+        self.pages = pages if pages is not None else {
+            None: ConversationPage((ConversationSummary(
+                conversation.id, conversation.title, 1700000000,
+                "https://claude.ai/chat/thread-1",
+            ),)),
+        }
+
+    def validate_connection(self):
+        return ProviderAccount(self.account, self.account, ("list", "read"))
+
+    def list_conversations(self, cursor=None, limit=50):
+        return self.pages[cursor]
+
+    def read_conversation(self, conversation_id):
+        if self.failure:
+            raise self.failure
+        return self.conversation
+
+
+@pytest.fixture
+def conversation():
+    return Conversation("thread-1", "Architecture", (
+        Message("question", "user", "Choose storage", timestamp=1700000000),
+        Message("discarded", "assistant", "Discarded option", "question"),
+        Message("accepted", "assistant", "Use durable-cloud-test storage", "question"),
+    ), active_leaf_id="accepted")
+
+
+@pytest.fixture
+def cached_document(tmp_path, conversation):
+    synchronize(ProviderStub(conversation), "claude-chat", root=tmp_path)
+    path = next(p for p in tmp_path.glob("*/*.json") if p.name != ".status.json")
+    return json.loads(path.read_text())
+
+
+def test_persists_provider_source(cached_document):
+    assert cached_document["source"] == "claude-chat"
+
+
+def test_persists_provider_account(cached_document):
+    assert cached_document["account_id"] == "account-a"
+
+
+def test_persists_source_reference(cached_document):
+    assert cached_document["source_url"] == "https://claude.ai/chat/thread-1"
+
+
+def test_retains_all_branch_messages(cached_document):
+    assert [message["id"] for message in cached_document["messages"]] == ["question", "discarded", "accepted"]
+
+
+def test_projects_only_active_branch_into_search(cached_document):
+    assert [turn["id"] for turn in cached_document["turns"]] == ["question", "accepted"]
+
+
+def test_same_remote_identity_stays_account_isolated(tmp_path, conversation):
+    synchronize(ProviderStub(conversation, "account-a"), "claude-chat", root=tmp_path)
+    synchronize(ProviderStub(conversation, "account-b"), "claude-chat", root=tmp_path)
+    assert len([p for p in tmp_path.glob("*/*.json") if p.name != ".status.json"]) == 2
+
+
+def test_schema_failure_preserves_cached_transcript(tmp_path, conversation):
+    provider = ProviderStub(conversation)
+    synchronize(provider, "claude-chat", root=tmp_path)
+    path = next(p for p in tmp_path.glob("*/*.json") if p.name != ".status.json")
+    before = path.read_bytes()
+    provider.failure = SchemaChanged("Changed upstream")
+    try:
+        synchronize(provider, "claude-chat", root=tmp_path)
+    except SchemaChanged:
+        pass
+    assert path.read_bytes() == before
+
+
+def test_schema_failure_is_visible(tmp_path, conversation):
+    provider = ProviderStub(conversation)
+    provider.failure = SchemaChanged("Changed upstream")
+    with pytest.raises(SchemaChanged):
+        synchronize(provider, "claude-chat", root=tmp_path)
+
+
+def test_empty_first_page_can_advance(tmp_path, conversation):
+    provider = ProviderStub(conversation, pages={
+        None: ConversationPage((), "next"),
+        "next": ConversationPage((ConversationSummary(conversation.id, conversation.title),)),
+    })
+    assert synchronize(provider, "claude-chat", root=tmp_path)["fetched"] == 1
+
+
+def test_empty_account_is_successful(tmp_path, conversation):
+    provider = ProviderStub(conversation, pages={None: ConversationPage(())})
+    assert synchronize(provider, "claude-chat", root=tmp_path)["state"] == "ready"
+
+
+def test_repeated_cursor_fails_instead_of_looping(tmp_path, conversation):
+    provider = ProviderStub(conversation, pages={
+        None: ConversationPage((), "next"), "next": ConversationPage((), "next"),
+    })
+    with pytest.raises(SchemaChanged, match="pagination did not advance"):
+        synchronize(provider, "claude-chat", root=tmp_path)
+
+
+def test_branch_cycle_does_not_persist(tmp_path):
+    conversation = Conversation("thread-1", "Cycle", (Message("self", "user", "x", "self"),), "self")
+    with pytest.raises(SchemaChanged, match="cycle"):
+        synchronize(ProviderStub(conversation), "claude-chat", root=tmp_path)
+
+
+class EmptyPagesStub(ProviderStub):
+    """A drifting upstream advances cursors without returning conversations."""
+
+    def list_conversations(self, cursor=None, limit=50):
+        return ConversationPage((), str(int(cursor or "0") + 1))
+
+
+def test_unique_empty_pages_are_bounded(tmp_path, conversation):
+    with pytest.raises(SchemaChanged, match="page budget"):
+        synchronize(EmptyPagesStub(conversation), "claude-chat", root=tmp_path, limit=1)
+
+
+def test_unknown_active_leaf_is_rejected(tmp_path):
+    conversation = Conversation("thread-1", "Missing leaf", (Message("known", "user", "x"),), "unknown")
+    with pytest.raises(SchemaChanged, match="missing message"):
+        synchronize(ProviderStub(conversation), "claude-chat", root=tmp_path)
+
+
+def test_overlong_final_page_reports_partial(tmp_path, conversation):
+    provider = ProviderStub(conversation, pages={None: ConversationPage((
+        ConversationSummary(conversation.id, conversation.title),
+        ConversationSummary("remaining", "Unfetched conversation"),
+    ))})
+    assert synchronize(provider, "claude-chat", root=tmp_path, limit=1)["state"] == "partial"
+
+
+@pytest.fixture
+def cli_module(monkeypatch, tmp_path):
+    loader = importlib.machinery.SourceFileLoader(
+        "one_conv_cloud_test_cli", str(Path(__file__).parents[1] / "bin" / "one-conv")
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, loader.name, module)
+    loader.exec_module(module)
+    # Local adapters are excluded from this cloud-only acceptance fixture.
+    monkeypatch.setattr(module, "_claude_iter_projects", lambda: iter(()))
+    monkeypatch.setattr(module, "_codex_iter_projects", lambda: iter(()))
+    monkeypatch.setattr(module, "_cursor_iter_projects", lambda: iter(()))
+    monkeypatch.setattr(module, "_omp_iter_projects", lambda: iter(()))
+    monkeypatch.setattr(module, "_chatgpt_iter_projects", lambda: iter(()))
+    monkeypatch.setattr(module, "_corpus_iter_projects", lambda: iter(()))
+    monkeypatch.setattr(module, "_cursor_composer_ids_matching", lambda _: set())
+    monkeypatch.setenv("ONE_CONV_CLOUD_CACHE", str(tmp_path))
+    return module
+
+
+def test_public_cloud_help(cli_module):
+    result = CliRunner().invoke(cli_module.cli, ["cloud", "--help"])
+    assert result.exit_code == 0, result.output
+
+
+def test_public_cloud_provider_coverage(cli_module):
+    result = CliRunner().invoke(cli_module.cli, ["cloud", "providers"])
+    assert next(row for row in json.loads(result.output) if row["product"] == "cowork-cloud")["adapter"] == "unsupported"
+
+
+def test_default_offline_search_reads_cached_claude_chat(cli_module, tmp_path, conversation):
+    synchronize(ProviderStub(conversation), "claude-chat", root=tmp_path)
+    result = CliRunner().invoke(cli_module.cli, ["search", "durable-cloud-test", "--offline", "--json"])
+    assert json.loads(result.output)[0]["source"] == "claude-chat"
+
+
+def test_offline_search_excludes_discarded_branch(cli_module, tmp_path, conversation):
+    synchronize(ProviderStub(conversation), "claude-chat", root=tmp_path)
+    result = CliRunner().invoke(cli_module.cli, ["search", "Discarded option", "--offline", "--json"])
+    assert json.loads(result.output) == []
+
+
+@pytest.mark.parametrize("payload", [
+    "invalid-json",
+    [],
+    {"source": "claude-chat", "turns": []},
+    {"source": "claude-chat", "turns": {}, "cwd": "account", "session": "id"},
+    {"source": "claude-chat", "turns": [], "cwd": 42, "session": "id"},
+])
+def test_malformed_cache_does_not_break_default_search(cli_module, tmp_path, conversation, payload):
+    synchronize(ProviderStub(conversation), "claude-chat", root=tmp_path)
+    directory = tmp_path / "malformed"
+    directory.mkdir()
+    (directory / "broken.json").write_text(payload if isinstance(payload, str) else json.dumps(payload))
+    result = CliRunner().invoke(cli_module.cli, ["search", "durable-cloud-test", "--offline", "--json"])
+    assert json.loads(result.output)[0]["source"] == "claude-chat"

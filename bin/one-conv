@@ -110,7 +110,13 @@ logging.basicConfig(
 )
 log = logging.getLogger("one-conv")
 
-SOURCES = ("claude", "codex", "cursor", "omp", "chatgpt", "corpus")
+CLOUD_SOURCES = ("claude-chat", "codex-cloud", "cowork-cloud")
+SOURCES = ("claude", "codex", "cursor", "omp", "chatgpt", "corpus", *CLOUD_SOURCES)
+
+# Resolve the checkout behind the launcher symlink for the shared provider package.
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+if str(_PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PACKAGE_ROOT))
 
 CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
 PROJECTS_DIR = CLAUDE_HOME / "projects"
@@ -1546,23 +1552,18 @@ def _chatgpt_sync_account(auth: dict, limit: int, refresh: bool, assets: bool = 
     # a readable account, and whatever it managed to pull stays usable.
     _chatgpt_write_account(account_dir, auth)
 
+    from one_conv.providers.chatgpt import ChatGPTProvider
+    from one_conv.providers.base import JsonTransport
+    provider = ChatGPTProvider(session, transport=JsonTransport(session, CHATGPT_HOST, "chatgpt-compat", sleep=time.sleep))
     listed: list[dict] = []
-    for archived in (False, True):
-        offset, page = 0, 100
-        while len(listed) < limit:
-            resp = session.get(
-                f"{CHATGPT_HOST}/backend-api/conversations",
-                params={"offset": offset, "limit": min(page, limit - len(listed)),
-                        "order": "updated", "is_archived": str(archived).lower()},
-                timeout=60,
-            )
-            if resp.status_code != 200:
-                break
-            items = (resp.json() or {}).get("items") or []
-            if not items:
-                break
-            listed.extend(items)
-            offset += len(items)
+    cursor = None
+    while len(listed) < limit:
+        page = provider.list_conversations(cursor, min(100, limit - len(listed)))
+        listed.extend({"id": item.id, "title": item.title, "update_time": item.updated_at}
+                      for item in page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
 
     fetched = skipped = quota_spent = gone = 0
     saved_assets = missing_assets = blocked_assets = 0
@@ -1634,13 +1635,9 @@ def _chatgpt_get_with_backoff(session, url: str, timeout: int = 60):
     including a permanent error like 404 — or None once the quota outlasts
     the backoff schedule, which the caller must not read as "no such thing".
     """
-    for pause in _CHATGPT_BACKOFF:
-        resp = session.get(url, timeout=timeout)
-        if resp.status_code not in (429, 500, 502, 503, 504):
-            return resp
-        time.sleep(pause)
-    resp = session.get(url, timeout=timeout)
-    return None if resp.status_code in (429, 500, 502, 503, 504) else resp
+    from one_conv.providers.base import retry_response
+    return retry_response(lambda: session.get(url, timeout=timeout),
+                          pauses=_CHATGPT_BACKOFF, sleep=time.sleep)
 
 
 def _chatgpt_fetch_conversation(session, cid: str) -> tuple[str, dict | None]:
@@ -1651,12 +1648,21 @@ def _chatgpt_fetch_conversation(session, cid: str) -> tuple[str, dict | None]:
     still get it. Keeping the last two apart is what lets sync say whether
     what it skipped is lost or merely deferred.
     """
-    resp = _chatgpt_get_with_backoff(session, f"{CHATGPT_HOST}/backend-api/conversation/{cid}")
+    from one_conv.providers.chatgpt import conversation_path, validate_chatgpt_document
+    from one_conv.providers.base import AuthenticationRequired, ProviderUnavailable, SchemaChanged
+    resp = _chatgpt_get_with_backoff(session, CHATGPT_HOST + conversation_path(cid))
     if resp is None:
         return "quota", None
     if resp.status_code == 200:
-        return "ok", resp.json()
-    return "missing", None
+        try:
+            return "ok", validate_chatgpt_document(resp.json())
+        except ValueError:
+            raise SchemaChanged("ChatGPT conversation no longer returns JSON") from None
+    if resp.status_code == 404:
+        return "missing", None
+    if resp.status_code in (401, 403):
+        raise AuthenticationRequired("ChatGPT needs authorization; cached conversations are retained")
+    raise ProviderUnavailable(f"ChatGPT conversation read failed: HTTP {resp.status_code}")
 
 
 def _chatgpt_store_conversation(account_dir: Path, cid: str, doc: dict, title: str | None = None) -> Path:
@@ -1678,28 +1684,28 @@ def _chatgpt_remote_search(session, query: str, limit: int, *, strict: bool = Fa
     """
     from urllib.parse import urlencode
 
-    hits: list[dict] = []
-    cursor = None
-    while len(hits) < limit:
-        params = {"query": query}
-        if cursor:
-            params["cursor"] = cursor
-        resp = _chatgpt_get_with_backoff(
-            session, f"{CHATGPT_HOST}/backend-api/conversations/search?{urlencode(params)}"
-        )
-        if resp is None or resp.status_code != 200:
-            if strict:
-                raise RuntimeError("Online conversation search is unavailable; local results are still shown")
-            break
-        payload = resp.json() or {}
-        items = payload.get("items") or []
-        if not items:
-            break
-        hits.extend(items)
-        cursor = payload.get("cursor")
-        if not cursor:
-            break
-    return hits[:limit]
+    from one_conv.providers.chatgpt import ChatGPTProvider
+    from one_conv.providers.base import ProviderError, ProviderUnavailable, SchemaChanged
+
+    class SearchTransport:
+        """Adapt the compatibility retry seam to the shared provider parser."""
+
+        def get(self, path, params=None):
+            response = _chatgpt_get_with_backoff(session, f"{CHATGPT_HOST}{path}?{urlencode(params or {})}")
+            if response is None or response.status_code != 200:
+                raise ProviderUnavailable("Online conversation search is unavailable; local results are still shown")
+            try:
+                return response.json()
+            except ValueError:
+                raise SchemaChanged("ChatGPT search no longer returns JSON") from None
+
+    try:
+        return ChatGPTProvider(session, transport=SearchTransport()).search_conversations(query, limit)
+    except ProviderError:
+        if strict:
+            raise
+        log.warning("ChatGPT search is unavailable; cached history is retained")
+        return []
 
 
 def _chatgpt_epoch(value) -> float:
@@ -1879,9 +1885,46 @@ def _iter_all_projects(sources: tuple[str, ...]):
         yield from _chatgpt_iter_projects()
     if "corpus" in sources:
         yield from _corpus_iter_projects()
+    yield from _cloud_projects(sources)
+
+
+def _cloud_documents():
+    root = Path(os.environ.get("ONE_CONV_CLOUD_CACHE", str(Path.home() / ".cache/one-conv-cli/cloud")))
+    for path in root.glob("*/*.json"):
+        if path.name.startswith("."):
+            continue
+        try:
+            document = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if (isinstance(document, dict) and isinstance(document.get("turns"), list)
+                and isinstance(document.get("cwd"), str) and isinstance(document.get("session"), str)
+                and document.get("source") in (*CLOUD_SOURCES, "chatgpt")):
+            yield path, document
+
+
+def _cloud_projects(sources):
+    seen = set()
+    for _, document in _cloud_documents():
+        source, cwd = document["source"], document["cwd"]
+        if source in sources and (source, cwd) not in seen:
+            seen.add((source, cwd))
+            yield ProjectHandle(source=source, cwd=cwd, key="cloud:" + cwd)
+
+
+def _cloud_sessions(project):
+    handles = []
+    for path, doc in _cloud_documents():
+        if doc["source"] == project.source and doc["cwd"] == project.cwd:
+            handles.append(SessionHandle(source=project.source, uuid=doc["session"],
+                project_cwd=project.cwd, mtime=path.stat().st_mtime, path=path,
+                title_hint=doc.get("title")))
+    return sorted(handles, key=lambda row: row.mtime, reverse=True)
 
 
 def _project_sessions(project: ProjectHandle) -> list[SessionHandle]:
+    if project.key.startswith("cloud:"):
+        return _cloud_sessions(project)
     if project.source == "claude":
         return _claude_project_sessions(project)
     if project.source == "codex":
@@ -1898,6 +1941,13 @@ def _project_sessions(project: ProjectHandle) -> list[SessionHandle]:
 
 
 def _handle_iter_turns(handle: SessionHandle, include_subagents: bool) -> list[Turn]:
+    if handle.source in CLOUD_SOURCES or (handle.source == "chatgpt" and handle.path.parent.parent == Path(os.environ.get("ONE_CONV_CLOUD_CACHE", str(Path.home() / ".cache/one-conv-cli/cloud")))):
+        rows = json.loads(handle.path.read_text()).get("turns", [])
+        return [Turn(ts=row.get("ts") or "", role=row.get("role") or "user",
+                     blocks=[{"type": "text", "text": row.get("text") or
+                         json.dumps(row.get("content_blocks") or [], ensure_ascii=False)}])
+                for row in rows if row.get("role") != "structure" and
+                (row.get("text") or row.get("content_blocks"))]
     if handle.source == "claude":
         return list(_iter_turns(handle.path, include_subagents=include_subagents))
     if handle.source == "codex":
@@ -3298,6 +3348,14 @@ def append(mouth: str, role: str, text: str, machine: str | None) -> None:
     """Write one turn into the shared brain log (seconds-fresh on every host after sync)."""
     path = _append_log_turn(mouth, role, text, machine=machine)
     click.echo(str(path))
+
+
+@cli.command("cloud", context_settings={"ignore_unknown_options": True, "allow_extra_args": True}, add_help_option=False)
+@click.pass_context
+def cloud_command(context):
+    """Inspect and sync experimental session-based cloud adapters."""
+    from one_conv.cloud_cli import cloud_group
+    cloud_group.main(args=context.args, prog_name=context.command_path, standalone_mode=False)
 
 
 if __name__ == "__main__":

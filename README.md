@@ -350,3 +350,10 @@ Same idea — your own messages, from the terminal, for other channels
 - [**whatsapp-cli**](https://github.com/ClementWalter/whatsapp-cli) — your personal WhatsApp chats (pairs as a linked device)
 - [**slack-user-cli**](https://github.com/ClementWalter/slack-user-cli) — Slack via your existing browser session credentials
 - [**tg-cli**](https://github.com/ClementWalter/tg-cli) — your own Telegram chats via your user account (Telethon)
+# Experimental cloud sources
+
+`one-conv cloud providers` reports adapter coverage for ChatGPT, Claude Chat,
+Codex cloud and Cowork cloud. See [provider architecture and limits](PROVIDERS.md)
+for session-based sync, API-change handling and current verification status.
+Claude Chat and Codex current-task adapters are fixture-tested; Cowork cloud
+remains unsupported. A hosted user login flow is not implemented yet.
