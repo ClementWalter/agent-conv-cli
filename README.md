@@ -1,430 +1,222 @@
-# one-conv-cli
+# one-conv
 
-Read your own conversation history through two command namespaces:
+Read and search your AI conversations from one CLI. Pull cloud conversations
+into a local history, or read sessions already saved by your coding tools.
 
-- **`cloud`**: ChatGPT, Claude Chat, Codex cloud, and experimental Cowork.
-- **`local`**: Claude Code, Codex CLI, Cursor, Oh My Pi, and the shared corpus on disk.
+| Namespace | Sources |
+| --- | --- |
+| `cloud` | ChatGPT, Claude Chat, Codex cloud, Cowork cloud |
+| `local` | Claude Code, Codex CLI, Cursor, Oh My Pi, shared corpus files |
 
-```bash
-one-conv cloud claude connect --browser chrome
-one-conv cloud claude accounts --json
-one-conv cloud claude pull --account Zama --limit 10
-one-conv cloud claude chats --json
-one-conv cloud claude thread QUERY
-one-conv cloud chatgpt pull --account EMAIL --limit 10
-one-conv cloud codex pull --account EMAIL --limit 10
-one-conv cloud search QUERY
-one-conv local chats
-one-conv local search QUERY
-one-conv local thread PROJECT --source claude
-```
-
-`cloud chats` lists individual saved conversations across products, newest activity
-first (default 30; `--limit 0` lists all). `cloud cached-accounts` lists saved
-account groups and counts. Product `accounts` commands discover browser logins;
-`pull` fetches history. Listing conversations does not contact providers.
-
-Read an individual conversation using its displayed ID:
-`one-conv cloud read ID` (or `one-conv cloud chat ID`). A unique title also works.
-`cloud thread ID` is equivalent. `--no-mark-read` preserves its unread marker.
-`--refresh` refreshes accessible accounts before reading the saved conversation;
-the per-account refresh cap still applies. Account grouping is available through
-`cloud cached-accounts`; cloud `read` takes a conversation, not an account group.
-Cloud readers announce saved-history mode on stderr. Product readers support
-`--refresh` to fetch up to 100 conversations first; failures stop the command
-without silently substituting cached results. Older saved conversations can
-still appear in the resulting list.
-
-`one-conv cloud chats --refresh` refreshes every accessible supported browser
-account across products, then lists their combined saved conversations. It
-fetches up to 100 conversations per account/product. Unsupported products and
-inaccessible accounts are reported as skipped; refresh errors stop the listing
-after attempting the other accounts. `--source` restricts both refresh and listing.
-
-Use `one-conv cloud claude connect --login --browser chrome` to open provider
-sign-in, then `one-conv cloud claude accounts` to verify the account. An existing
-personal login must be switched to work, or kept in a separate browser profile.
-Plain `connect` authorizes Keychain access, not provider login.
-
-Each cloud product has `connect`, `accounts`, `pull`, `chats`, `read`, `thread`, `search`,
-`find`, and `unread`. Readers use saved history; only `pull` and account discovery
-contact providers. `local` never discovers cloud accounts. Product names remove
-the ambiguity between `cloud claude` and local Claude Code, or `cloud codex` and
-local Codex CLI.
-
-Claude uses the same browser-session strategy as OpenAI, with organization name
-or ID selection. Session discovery never prompts for Keychain passwords; a
-protected browser key can therefore make a signed-in account unavailable to the
-CLI. Explicit `connect --browser chrome` installs a stable native helper and
-allows setup authorization for that browser only. Choose Always Allow in macOS;
-both Claude and OpenAI then reuse that helper silently. Ordinary CLI updates
-leave the helper executable untouched. This local build uses ad hoc signing;
-replacing the helper can require renewed authorization. The initial local build
-requires macOS developer tools; passive pulls never compile or prompt.
-Cowork uses the Claude browser login and reads remote sessions with paginated
-event transcripts, including tool questions. A complete snapshot does not mean
-the underlying task has finished. Hosted session-file login remains unavailable.
-See [PROVIDERS.md](PROVIDERS.md) for coverage and live verification limits.
-
-## Compatibility reference
-
-Existing top-level commands below remain callable for scripts and integrations,
-but are omitted from the main help. Their cross-source behavior is preserved.
-Prefer the namespaces above for new usage.
-
-```bash
-one-conv chats                        # projects (channels) across every source, most recent first
-one-conv read "myproject"              # list every thread's anchor in that project, any source
-one-conv thread "myproject"            # render the most recent thread in full
-one-conv read "myproject" --expand     # render EVERY thread in that project in full
-one-conv search "deploy-checklist"     # full-text search across everything
-one-conv find "deploy-checklist"       # find a thread by name (its derived title)
-one-conv fork "myproject" --yes        # continue a past Claude Code thread interactively, as a new one
-one-conv send "myproject" "..." --yes  # send a message into a Claude Code thread headlessly, print the reply
-one-conv port "myproject" --into codex --yes  # seed a NEW session with another provider, from any source
-one-conv chatgpt search "assurance"     # search your WHOLE chatgpt.com history, live — no sync needed
-one-conv chatgpt sync --search "assurance"   # copy just those conversations into the cache
-one-conv chatgpt sync                  # same job, no scope: the whole account (bulk backfill)
-one-conv chatgpt accounts              # which ChatGPT accounts are cached / signed in
-one-conv unread                        # what's new since you last viewed it
-one-conv skill-usage                   # every Skill-tool invocation ever, count + last used (Claude Code only)
-```
-
-Same shape as Slack, one level up: a **project** (the directory an agent ran
-in) is a **channel**, and a **session IS a thread** — an anchor message (its
-first turn) plus every turn tied to it. The command set mirrors Slack's
-exactly:
-
-| Slack | one-conv-cli |
-|---|---|
-| `channels` | `chats` |
-| `read <channel>` (flat) | bare `read <query>` (every thread's anchor) |
-| `read <channel> --expand-thread` | `read <query> --expand` |
-| `thread <channel> <ts>` | `thread <query>` (`--session`/`--nth` instead of a `ts`) |
-| `search <query>` | `search <text>` |
-
-Unlike Slack, there's no "loose message outside any thread" — every turn
-belongs to some session, so a project has nothing to show beyond its
-threads.
-
-## Compatibility reader internals
-
-- **Claude Code** — `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`, one
-  JSON-lines file per session (Anthropic Messages API shape).
-- **Codex CLI** — `~/.codex/sessions/<Y>/<m>/<d>/rollout-*.jsonl` +
-  `~/.codex/archived_sessions/*.jsonl` (OpenAI Responses-API shape:
-  `message`/`reasoning`/`function_call`/`function_call_output` items). Not
-  bucketed by project at all — every session from every project shares one
-  date-tree — so this CLI groups sessions by their own recorded `cwd` itself.
-- **Cursor** — one SQLite database,
-  `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`. A
-  `composerHeaders` table (one row per chat, with a **real stored title and
-  native unread flag**) plus a
-  `cursorDiskKV` blob table keyed by `composerData:<id>` (bubble order) and
-  `bubbleId:<composerId>:<bubbleId>` (each bubble's text). Opened read-only
-  (`mode=ro`) — no snapshot-copy needed (the db is often 1GB+; SQLite's own
-  WAL readers already get a consistent view without one).
-- **Oh My Pi** — `~/.omp/agent/sessions/<cwd-encoded>/<timestamp>_<uuid>.jsonl`
-  (override with `$OMP_HOME`). Each file starts with a `session` event carrying
-  the real `cwd`, session id, and stored title; this CLI groups by that cwd.
-  Unread is local bookkeeping, same as Claude Code/Codex.
-- **ChatGPT web** — chatgpt.com has no local transcript store, so this is the
-  one source that fetches over the network. The normal path needs no bulk
-  backfill at all: `one-conv search` queries chatgpt.com's own index alongside local
-  transcripts. `chatgpt search` queries only the online index of the
-  whole history, and `chatgpt sync --search "..."` (or `chatgpt sync <id>`)
-  copies just those conversations down in seconds, since the id a search
-  returns is the one the conversation endpoint takes. `chatgpt sync` with no
-  scope does the same job for the whole account — worth running so
-  conversations show up in offline, cross-source `search`/`read`, but never a
-  prerequisite. It writes conversations into
-  `~/.cache/one-conv-cli/chatgpt/<account>/` (override with
-  `$ONE_CONV_CHATGPT_CACHE`). `chats` and `read` work from that cache;
-  `search --offline` limits search to local history. There is nothing
-  to log into: the session is read straight out of a local Chromium profile's
-  cookie store (Chrome/Arc/Brave/Edge, decrypted with the macOS keychain key),
-  exactly as `notion-cli` and `rentalready-cli` do. Multi-account is native —
-  every signed-in profile is swept, each account caches separately, and an
-  account already synced stays readable after you sign out of it. A ChatGPT
-  conversation is a *tree* (every regenerate forks a branch), so only the path
-  from `current_node` back to the root — the conversation as you last saw it —
-  is rendered. Since there is no `cwd`, the channel is the account:
-  `chatgpt:<email>`. Expect more than one sync on a large history:
-  chatgpt.com rate-limits conversation reads as a quota rather than a pace, so
-  sync backs off, then stops and reports what it could not fetch instead of
-  dropping it silently — re-running skips what is cached and resumes.
-  Attachments (images, PDFs, voice notes) are named in the transcript from
-  their upload filename; `--assets` also downloads the files themselves into
-  `<account>/assets/`, deduplicated by file id so a multi-page PDF is fetched
-  once. Files old enough to have aged out of ChatGPT's storage are reported
-  as gone, separately from ones a spent quota merely deferred. Because the
-  limit is a quota, a large history needs several passes — `--until-complete`
-  repeats them on a timer until nothing is outstanding — but since a scoped
-  sync already reaches anything on demand, the unscoped one is a convenience,
-  not a milestone to wait for. `one-conv search` combines local full-text matches
-  and live ChatGPT matches by default. `--offline` skips online discovery.
-  Keychain reads never prompt; unavailable online accounts and failed searches
-  are reported on stderr while local results remain available.
-
-Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
-rendering/cleaning/search work identically regardless of source. The same
-real directory often shows up under more than one source (you `cd` into a
-repo and reach for whichever agent fits) — `chats` lists each `(source,
-project)` pair as its own row, but a query that exactly names one real
-directory merges every source's threads for it into one recency-sorted list
-in `read`/`thread`/`search`/`find`/`unread`.
-`--source claude|codex|cursor|omp|chatgpt` narrows any of them back to one
-backend.
-
-## Prerequisites
-
-Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) — it runs the
-script and resolves its dependencies (`click`, plus `curl_cffi` and
-`pycryptodome` for the ChatGPT sync) on demand:
-
-```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# or
-brew install uv
-```
-
-The `npx skills` install path additionally requires Node.js (for `npx`).
+Cloud conversations are addressed by ID or title. Local sessions are grouped
+by the project where the agent ran.
 
 ## Install
 
-**A — Bundled launcher.** No install step. Clone the repo and invoke
-`one-conv` directly; the `#!/usr/bin/env -S uv run --script` shebang and
-[PEP 723](https://peps.python.org/pep-0723/) inline metadata make `uv` pull
-deps on the first run.
+You need Python 3.11+ and [uv](https://docs.astral.sh/uv/). The launcher declares
+its dependencies inline; uv resolves them on first use.
+
+Clone this repository and run `./bin/one-conv --help`. The executable is
+[`bin/one-conv`](bin/one-conv). Add the checkout's `bin` directory to your `PATH`
+to use the shorter `one-conv` command shown below.
+
+The repository also includes an [agent skill](SKILL.md). Install the checkout
+as a skill in your agent runtime to give it the same launcher and usage guide.
+
+Local history readers use files on your machine. Browser-session discovery and
+login currently target macOS. Initial Keychain setup requires Apple's
+command-line developer tools to build the native credential helper.
+
+## Connect a cloud account
+
+Sign in to the provider in Chrome, Arc, Brave, Edge, or Chromium. For example,
+open Claude's sign-in page with:
 
 ```bash
-git clone <repo> one-conv-cli
-cd one-conv-cli
-./bin/one-conv chats
+one-conv cloud claude connect --login --browser chrome
 ```
 
-**B — As an agent skill.** The repo ships a `SKILL.md` and the self-contained
-`one-conv` launcher at the project root, in the
-[Vercel Labs `skills`](https://github.com/vercel-labs/skills) format:
+Finish signing in in the browser. If it already has your personal account
+signed in, switch to your work account there, or use separate browser profiles
+to keep both accounts available. Opening the page does not verify the login.
+
+Authorize one-conv to read that browser's session, then verify account access:
 
 ```bash
-npx skills add <owner>/one-conv-cli
+one-conv cloud claude connect --browser chrome
+one-conv cloud claude accounts
 ```
 
-This drops the skill under `~/.agents/skills/one-conv-cli/` and symlinks it
-into every supported agent runtime installed on your machine (Claude Code,
-Cursor, Windsurf, Codex, Gemini CLI, …). Agents then drive the CLI by invoking
-the bundled `one-conv` script directly.
+The authorization command may show a macOS Keychain dialog for
+`credential-helper-v1`. Choose **Always Allow** to let the persistent helper
+reuse this authorization. Normal reads, discovery, and pulls never open
+password dialogs.
 
-To install locally for development instead, symlink the checkout so the skill
-picks up live edits:
+`accounts` lists sessions the CLI can actually access. An empty result means
+no account is accessible, not that its conversation history is empty.
+
+Replace `claude` with `chatgpt`, `codex`, or `cowork` for the other products.
+Claude Chat and Cowork use the Claude login; ChatGPT and Codex use the OpenAI
+login. Keychain authorization for a browser is shared across these products.
+
+## Refresh, list, and read
+
+Refresh accessible accounts across all cloud products and list conversations:
 
 ```bash
-mkdir -p ~/.claude/skills
-ln -s "$(pwd)" ~/.claude/skills/one-conv-cli
+one-conv cloud chats --refresh
 ```
 
-## Usage
+Each row shows activity time, source, account label, short conversation ID,
+turn count, and title. Copy the ID in square brackets into `read`:
 
 ```bash
-one-conv chats                                     # projects/channels across every source, most recent first
-one-conv chats --source cursor --limit 100 --json  # everything from one backend, machine-readable
-one-conv read myproject                            # every thread's anchor: title, turns, timestamp (all sources)
-one-conv read myproject --source codex             # same, but only Codex's threads
-one-conv read myproject --match 2                  # disambiguate when multiple (source, project) pairs match
-one-conv read myproject --expand                   # every thread in that project, in full
-one-conv read myproject --expand --limit 5         # cap to the 5 most recent threads, in full
-one-conv thread myproject                          # ONE thread in full — most recently active by default, any source
-one-conv thread myproject --nth 2                  # the thread before the most recent one
-one-conv thread myproject --session a1b2c3d4       # an exact thread, by session-UUID/composerId prefix
-one-conv thread myproject --limit 20               # only its last 20 turns
-one-conv thread myproject --raw                    # include thinking + tool call/result blocks
-one-conv search "deploy-checklist"                 # full-text search across every project and source
-one-conv search "deploy-checklist" --project myproject  # scoped to one project
-one-conv find "deploy-checklist"                   # find a thread by its derived title (name)
-one-conv fork myproject                            # dry-run: shows the thread + command it'd launch (Claude Code only)
-one-conv fork myproject --session a1b2c3d4 --yes   # actually fork that thread
-one-conv send myproject "what's the status of #123?"          # dry-run (Claude Code only)
-one-conv send myproject "what's the status of #123?" --yes    # appends to that same thread
-one-conv send myproject "try another approach" --fork --yes   # sends into a NEW branch instead
-one-conv unread                                    # everything unread, across every project and source
-one-conv unread --project myproject                # scoped to one project
-one-conv unread --mark-all-read                    # catch up in bulk (Claude Code/Codex only — Cursor tracks its own)
-one-conv port myproject --source cursor --into claude          # cursor thread's content -> brand-new claude session
-one-conv port myproject --source codex --into claude --print   # headless, capture the reply
-one-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
-one-conv skill-usage                               # every skill invoked, ever: count + last-used timestamp
-one-conv skill-usage --since-days 30 --json        # only the last 30 days, machine-readable
+one-conv cloud read ID
 ```
 
-`one-conv --help` lists every subcommand; `one-conv <cmd> --help` for
-per-command options including `--json`, `--limit`, `--match`, `--nth`,
-`--session`, `--source`, `--expand`, `--raw`, `--include-subagents`, `--fork`,
-`--into`, `--permission-mode`, `--yes`, `--no-mark-read`, `--mark-all-read`,
-`--since-days`.
+Replace `ID` with the displayed value, or use a unique title. Ambiguous matches
+require a more specific ID. `cloud chat ID` and `cloud thread ID` are aliases.
 
-Every read command supports `--json` for structured output. `fork`, `send`,
-and `port` are the ones that write. `fork`/`send` are **Claude Code only**
-(Codex has an analogous `codex exec resume` but no fork flag; Cursor has no
-CLI at all): `fork` hands off to a real interactive `claude --resume
---fork-session` process (a brand-new session ID via Claude Code's own fork
-mechanism); `send` does the headless equivalent via `claude --print
---resume`, and — unless `--fork` is passed — genuinely continues the *same*
-thread, appending the reply exactly as an interactive resume would. `port`
-goes cross-provider instead: it starts a **brand-new** session with a
-*different* provider (`--into claude|codex`), seeded with the source
-thread's rendered transcript as the opening prompt — not a true resume,
-since no provider understands another's session format. All three default
-to a dry-run, same convention as the personal-messaging CLIs' `send`
-commands.
+The default reader shows conversation text. Claude Chat and Cowork tool calls,
+tool results, and thinking blocks are hidden. `--raw` exposes additional
+retained details; tool calls and results are summarized by the renderer.
 
-## How it works
+| Reading option | Effect |
+| --- | --- |
+| `--limit 20` | Show the last 20 visible turns; `0` shows all |
+| `--no-mark-read` | Preserve the unread marker |
+| `--json` | Emit structured data on stdout |
+| `--refresh` | Refresh accessible accounts before reading saved history |
 
-- **`read`/`thread` split mirrors Slack's `read`/`--expand-thread`/`thread`
-  exactly** — `read` never targets a single thread; bare, it lists every
-  thread's anchor (no content), `--expand` inlines every thread's full
-  content instead (`--limit` then caps threads shown, not turns).
-  `thread <query>` is the dedicated command for reading exactly one thread in
-  full, defaulting to the most recent (`--nth`/`--session` to pick another;
-  `--limit` caps turns there). Bare `read` never marks anything read (no
-  content was shown); `read --expand` and `thread` do.
-- **An exact project-name match auto-merges across sources.** A query
-  substring-matches every nested candidate (worktrees, subpackages, *and*
-  every source that has history there), which would normally force `--match`
-  constantly — but if exactly one real directory's own name equals the
-  query, every source's entry for it is merged automatically. Only a
-  genuinely ambiguous query prints the numbered `[source] cwd (N threads)`
-  disambiguation list.
-- **Project resolution doesn't trust the directory name** for Claude Code
-  (and Cursor's workspace hash). Claude Code encodes a project's cwd by
-  turning every `/` and `.` into `-`, which is lossy on its own — a literal
-  dash in a folder name is indistinguishable from an encoded separator.
-  Instead, this CLI scans the `cwd` values actually recorded across a
-  project directory's session files and picks whichever one re-encodes to
-  exactly that directory's name. This matters in practice: a git-worktree
-  session can start in the parent repo and only `cd` into
-  `.claude/worktrees/<branch>` partway through, and Claude Code still files
-  the whole session under the worktree's encoded name — naively trusting a
-  session's first `cwd` would collapse several distinct worktree projects
-  onto the same (wrong) parent-repo path. Cursor's workspace id resolves to a
-  real path via that workspace's own `workspace.json`; Codex just records the
-  real `cwd` directly per session, cached across a whole invocation since
-  grouping means reading every session file once.
-- **Compact rendering by default, per backend.** Only genuine user/assistant
-  text is shown. Claude Code: `<system-reminder>`/`<task-notification>`
-  blocks stripped, slash-command wrappers collapse to `/name`, pure
-  tool-calling turns dropped (no placeholder), and a synthetic `user`
-  follow-up turn (Skill's injected body, or a slash command's expanded
-  prompt) dropped too — detected as a bare-text `user` turn immediately
-  after another `user` turn with no assistant turn in between, which never
-  happens for genuine input. Codex: `developer`-role messages (its
-  permissions/sandbox preamble) never surface at all, and the `AGENTS.md`
-  dump it prepends as its own separate `user` turn is dropped by content
-  prefix — the *first* of the two consecutive turns is the synthetic one
-  here, the opposite position from Claude Code's case. Cursor: bubbles are
-  already clean user/assistant pairs, nothing to strip. Pass `--raw` to
-  disable all of this and see everything, including thinking blocks and full
-  tool-call/tool-result detail.
-- **Subagent forks are excluded by default** (Claude Code's `isSidechain:
-  true` events) — pass `--include-subagents` to include them.
-- **Search/find use per-backend cheap pre-filters**: a substring check on raw
-  file bytes for Claude Code/Codex (before any JSON parsing), one batched SQL
-  `LIKE` query across Cursor's bubble table (no single-file check is
-  possible there) — so searching everywhere stays fast even with a lot of
-  history.
-- **No title is stored**, except by Cursor. `find`/`read`/`thread` derive one
-  for Claude Code/Codex threads from the first substantive user message.
-- **`skill-usage` reads the `Skill` tool_use event itself**, not skill output —
-  Claude Code always records `{"name": "Skill", "input": {"skill": "<name>"}}`
-  in the main transcript the moment a skill is invoked, even when the skill's
-  actual work then forks into a background subagent, so subagent turns never
-  need scanning. Same cheap raw-bytes pre-filter as `search`/`find` before any
-  JSON parsing keeps a full-history scan fast (a 900MB/2500-session history
-  scans in ~1s). It only reports what got used — never installed skills or
-  what to do about unused ones; that comparison belongs to the caller. In
-  `--json`, each skill also carries a `recent` list of `session`/`cwd`/`ts`
-  pointers (`--recent N` to size it) so a caller can jump straight to
-  `one-conv thread <cwd> --session <uuid>` right after a given load and
-  judge *how* the skill got used, not just whether it did.
-- **Token counts are input + output only, deliberately excluding cache
-  reads/writes.** Every thread listing and `thread`/`read --expand` header
-  shows a token total (`chats`/JSON output include the raw field too). With
-  prompt caching, a long session's later turns each re-read nearly its whole,
-  ever-growing context — summing cache fields across turns scales with
-  turns × context-size and balloons into the hundreds of millions for long
-  sessions (verified: 552M cache-read tokens on one 1193-turn Claude Code
-  session, dominated entirely by repeated cache reads). Input + output alone
-  tracks how much was actually exchanged instead. Same logic applies to
-  Codex: its own `total_token_usage` field has the identical cumulative-cache
-  problem, so this sums each call's *new* tokens
-  (`last_token_usage.input_tokens - cached_input_tokens + output_tokens`)
-  across every `token_count` event instead. Cursor has no cache concept in
-  its per-bubble `tokenCount`, so its input+output sum needs no adjustment.
-- **`fork` hands off to a real `claude` process** via `os.execvp`, replacing
-  this script entirely so the resumed thread gets a proper interactive
-  terminal — it `cd`s to the original thread's directory first, then runs
-  `claude --resume <uuid> --fork-session`.
-- **`send` uses `claude --print --resume` instead** (`subprocess.run`, not
-  `execvp`, so it can capture the reply and return control to the caller) —
-  no TTY needed. Verified live: forking a thread with `--permission-mode
-  plan` and a tool-free prompt returns a reply in a few seconds; the
-  original thread's turn count is untouched and a `--fork`'d branch (with
-  the reply appended) appears alongside it.
-- **`port` seeds a brand-new session with another provider** instead of
-  resuming — no provider can literally continue another's session format, so
-  the source thread's rendered transcript (same clean text `thread`/`read`
-  show, not a raw tool-call replay) becomes the opening prompt of a fresh
-  `claude`/`codex` process, started in the same directory. **Cursor can only
-  be a `--source`, never a `--into` target** — verified: `cursor --help` is
-  purely an editor launcher (open/diff/goto-line), with no chat/prompt
-  capability at all. Marks the source thread read (like `thread`) unless
-  `--no-mark-read` is passed, since its full content gets rendered either
-  way.
-- **Read/unread**: Claude Code and Codex have no concept of it, so both are
-  tracked via local bookkeeping, not a feature of either tool. A small state
-  file (`~/.config/one-conv-cli/read-state.json`, override with
-  `$ONE_CONV_STATE_DIR`) maps each session id to the file mtime it was
-  last read at; `thread`/`read --expand` update it (unless `--no-mark-read`),
-  and a thread counts as unread if it's never in that map or its current
-  mtime is newer than the recorded one. Deliberately kept out of `~/.claude`
-  — Claude Code owns that directory and this CLI never writes into it.
-  **Cursor already tracks unread state natively** (`composerHeaders`'
-  `hasUnreadMessages`) — that flag is read directly and never written to;
-  `unread --mark-all-read` skips Cursor threads entirely.
+The `●` marker means unread **in one-conv**, independently of the provider's
+read state. Reading marks the conversation read unless `--no-mark-read` is
+set. A later cache-file update can make it unread again. `? tok` means a token
+count is unavailable for that source.
 
-## Dependencies
+## Saved history versus live data
 
-Declared inline via PEP 723 in `one-conv`:
+Cloud readers use saved history unless you explicitly request a refresh. They
+announce the mode on stderr, keeping JSON stdout suitable for pipelines.
 
-- `click` — CLI framework
+| Command | Network behavior |
+| --- | --- |
+| `cloud chats` | List saved conversations; no fetch |
+| `cloud read ID` | Read a saved conversation; no fetch |
+| `cloud search TEXT` | Search saved message text; no fetch |
+| `cloud find TEXT` | Find saved conversations by title; no fetch |
+| `cloud chats --refresh` | Refresh accessible accounts, then list |
+| `cloud read ID --refresh` | Refresh accessible accounts, then read the saved conversation |
+| `cloud claude pull` | Fetch Claude history into the cache |
+| `cloud claude accounts` | Contact Claude to discover accessible browser accounts |
+| `cloud cached-accounts` | Show saved account groups and counts; no fetch |
 
-Everything else is Python stdlib (`json`, `re`, `sqlite3`, `pathlib`, …).
+Refresh fetches up to **100 conversations per account and product**. Results
+can also include older saved conversations and accounts that were not
+refreshed. This is a bounded update, not a guarantee that every cached
+conversation is current. Reading an older ID with `--refresh` does not fetch
+that specific conversation if it falls outside the batch.
 
-## Scope
+Global refresh reports inaccessible sources as skipped. If a discovered
+account's pull fails, it attempts the other accounts, preserves successful
+pulls, and exits with an error before displaying results. It does not silently
+substitute old results for a failed refresh.
 
-Single-user personal tooling for **your own** Claude Code / Codex / Cursor
-history on **your own** machine. It reads local files you already have
-access to — there is no network service, no account, and no way to read
-anyone else's conversations. The Claude Code and Codex backends are
-cross-platform (pure file reads); the Cursor backend auto-detects its data
-directory on macOS/Linux/Windows but has only been exercised on macOS.
+Use a product's `pull --limit` to request a larger batch, up to 10,000
+conversations. The sync report distinguishes `ready`, `partial`, and `error`.
+`partial` can mean the batch limit was reached or a transcript was incomplete.
+A complete Cowork event snapshot does not mean the task itself has finished.
 
-## See also
+## Accounts and sources
 
-Same idea — your own messages, from the terminal, for other channels
-(companion tools, same author):
+Discover account selectors before an explicit pull:
 
-- [**imessage-cli**](https://github.com/ClementWalter/imessage-cli) — your personal iMessage/SMS history
-- [**whatsapp-cli**](https://github.com/ClementWalter/whatsapp-cli) — your personal WhatsApp chats (pairs as a linked device)
-- [**slack-user-cli**](https://github.com/ClementWalter/slack-user-cli) — Slack via your existing browser session credentials
-- [**tg-cli**](https://github.com/ClementWalter/tg-cli) — your own Telegram chats via your user account (Telethon)
-# Experimental cloud sources
+```bash
+one-conv cloud claude accounts --json
+one-conv cloud claude pull --account ACCOUNT --limit 1000
+```
 
-`one-conv cloud providers` reports adapter coverage for ChatGPT, Claude Chat,
-Codex cloud and Cowork cloud. See [provider architecture and limits](PROVIDERS.md)
-for session-based sync, API-change handling and current verification status.
-ChatGPT, Claude Chat and Codex task-graph parsers are checked against actual
-signed-in browser responses; Cowork listing and event retrieval were also
-verified through a live Zama CLI pull on 2026-09-08.
-A hosted user login flow is not implemented yet.
+Replace `ACCOUNT` with a selector from discovery. OpenAI accepts an exact email
+or account ID. Claude accepts an organization name or ID, or the full account
+ID. Ambiguous selectors require the full ID. A product's `pull` automatically
+selects the account when only one is accessible.
+
+For one product, use `cloud chatgpt`, `cloud claude`, `cloud codex`, or
+`cloud cowork`. Each has `connect`, `accounts`, `pull`, `chats`, `read`,
+`thread`, `search`, `find`, and `unread`. Product readers accept `--refresh`.
+
+Shared commands accept `--source` with the stored names `chatgpt`,
+`claude-chat`, `codex-cloud`, or `cowork-cloud`. On `cloud chats --refresh`,
+this restricts both fetching and listing.
+
+`chats --limit` controls displayed rows, not the refresh batch size. It defaults
+to 30; `--limit 0` lists all saved conversations.
+
+## Local agent history
+
+Local commands organize sessions by project:
+
+```bash
+one-conv local chats
+one-conv local read PROJECT
+one-conv local thread PROJECT
+one-conv local search TEXT
+```
+
+Replace `PROJECT` with a name from the listing. `local read` lists its sessions;
+`local thread` reads the newest one. Choose another with `--session ID` or
+`--nth 2`, or use `local read PROJECT --expand` to read all of them.
+`--source claude|codex|cursor|omp|corpus` narrows the source. Local readers never
+discover cloud accounts.
+
+For agent workflows, `local fork` starts a new Claude Code thread from an
+existing one, `local send` continues a Claude Code thread, and `local port`
+seeds a new Claude Code or Codex session from another conversation. These
+commands default to dry-run and require `--yes` to launch an agent. Execution
+can modify files or use tools.
+
+`local export` writes normalized transcripts to a corpus, `local append` writes
+a turn to the shared log, and `local skill-usage` reports recorded Claude Code
+skill invocations. Each command's `--help` describes its options.
+
+## Storage and coverage
+
+Normalized cloud transcripts live under `~/.cache/one-conv-cli/cloud`,
+overridable with `ONE_CONV_CLOUD_CACHE`. Read-state bookkeeping uses
+`ONE_CONV_STATE_DIR`, defaulting to `~/.config/one-conv-cli` or an existing
+`~/.config/agent-conv-cli` directory. Older ChatGPT cache files remain readable
+and can overlap with the normalized cloud cache.
+
+Cloud adapters use unofficial provider APIs and remain experimental:
+
+| Product | Coverage |
+| --- | --- |
+| ChatGPT | Conversation listings and the selected message branch within each conversation |
+| Claude Chat | Organization-scoped conversations and message trees |
+| Codex cloud | Current tasks and returned turn graphs; no archived-task discovery |
+| Cowork cloud | Remote sessions and paginated event transcripts; no local Cowork sessions |
+
+The credential helper is installed once and reused across normal CLI updates.
+This local build uses ad hoc signing; replacing the executable can require
+Keychain authorization again. Browser sessions can expire independently.
+
+See [PROVIDERS.md](PROVIDERS.md) for adapter boundaries, API-change handling,
+and verification evidence. `cloud providers` reports implementation coverage,
+not your accounts' live connection status.
+
+## MCP and hosted access
+
+This repository currently provides a CLI and an agent skill. It does **not**
+implement or serve an MCP endpoint. A hosted conversation service, browser
+onboarding, and automatic session renewal are planned in
+[CLOUD_PLAN.md](CLOUD_PLAN.md), not shipped features.
+
+## Command reference
+
+Start with `one-conv --help`, `one-conv cloud --help`, or `one-conv local --help`.
+Add `--help` to any command for its options.
+
+Older top-level commands remain callable for existing scripts but are hidden
+from root help. Their project-based behavior differs from the cloud namespace.
+[LEGACY_COMMANDS.md](LEGACY_COMMANDS.md) documents that interface, including the
+older ChatGPT sync and asset-download workflow. Use `cloud` and `local` for new
+integrations.
