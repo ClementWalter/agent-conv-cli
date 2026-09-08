@@ -65,11 +65,18 @@ def _normalize_current_message(message):
 class ChatGPTProvider:
     """Read the evidenced ChatGPT web API using a caller-authorized session."""
 
-    def __init__(self, session, transport=None):
+    def __init__(self, session, transport=None, authenticated_account=None):
         self.session = session
         self.transport = transport or JsonTransport(session, ORIGIN, FINGERPRINT)
+        if authenticated_account is not None and not isinstance(authenticated_account, ProviderAccount):
+            raise ValueError("Authenticated account must be a provider identity")
+        self.authenticated_account = authenticated_account
 
     def validate_connection(self):
+        if self.authenticated_account is not None:
+            # Existing authenticated sessions need an access probe, not another cookie exchange.
+            self.list_conversations(limit=1)
+            return self.authenticated_account
         doc = self.transport.get("/api/auth/session")
         if not isinstance(doc, dict):
             raise SchemaChanged(f"{FINGERPRINT}: invalid authentication response")

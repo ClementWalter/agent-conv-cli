@@ -68,7 +68,16 @@ the supplied sign-in cookie for an API bearer token before Codex task access.
 Cloud login, a hosted session broker, hosted MCP and tenant storage are still
 separate implementation work in CLOUD_PLAN.md. The cache here belongs to one
 OS user; it is not a multi-tenant server database. No secrets are persisted in
-the conversation cache. No local browser fallback is attempted by cloud sync.
+the conversation cache. No automatic local browser fallback is attempted.
+
+For explicit development verification, `--browser-account EMAIL|ID` reuses the
+existing ChatGPT CLI authentication for ChatGPT and Codex cloud. It is mutually
+exclusive with `--session-file`, and is not a hosted login implementation.
+The authenticated account identity is retained while actual history access is
+checked; an additional token exchange is not required. Live CLI pulls on
+2026-09-08 retrieved two personal ChatGPT conversations and three personal Codex
+tasks. Claude personal browser login and a conversation read also succeeded,
+but Claude CLI session acquisition remains unimplemented.
 
 The bounded sync refetches up to `--limit` conversations per invocation; it is
 not yet a background incremental scheduler. A capped scan is partial. Absence

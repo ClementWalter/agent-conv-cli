@@ -8,10 +8,37 @@ import stat
 import click
 
 from .cloud import synchronize
-from .providers.base import ProviderError
+from .providers.base import ProviderAccount, ProviderError
 
 
 PRODUCTS = ("chatgpt", "claude-chat", "codex-cloud", "cowork-cloud")
+
+
+def browser_provider(product, selector, accounts):
+    """Reuse the launcher's authenticated sessions only after explicit selection."""
+    if product not in ("chatgpt", "codex-cloud"):
+        raise click.ClickException("--browser-account supports ChatGPT and Codex cloud only.")
+    if not callable(accounts):
+        raise click.ClickException("Browser accounts are unavailable in this client.")
+    if not selector.strip():
+        raise click.ClickException("Choose an exact browser account email or account ID.")
+    matches = [account for account in accounts()
+               if selector in (account.get("account_id"), account.get("email"))]
+    if not matches:
+        raise click.ClickException("No signed-in browser account matches that email or ID.")
+    if len(matches) != 1:
+        raise click.ClickException("Several accounts share that email; choose an exact account ID.")
+    account = matches[0]
+    if not account.get("account_id") or account.get("session") is None:
+        raise click.ClickException("The selected browser account has no authenticated session.")
+    if product == "chatgpt":
+        from .providers.chatgpt import ChatGPTProvider
+        return ChatGPTProvider(account["session"], authenticated_account=ProviderAccount(
+            account["account_id"], account.get("email") or account["account_id"],
+            ("list", "read", "search"),
+        ))
+    from .providers.codex import CodexProvider
+    return CodexProvider(account["session"], account["account_id"], account.get("email"))
 
 
 def session_provider(product, path, organization):
@@ -81,15 +108,24 @@ def providers():
 @cloud_group.command("sync")
 @click.argument("product", type=click.Choice(PRODUCTS))
 @click.option("--session-file", type=click.Path(path_type=Path), envvar="ONE_CONV_SESSION_FILE", help="Private session provisioned by an authentication broker; never a browser database.")
+@click.option("--browser-account", metavar="EMAIL|ID", help="Explicitly reuse one signed-in account from the existing ChatGPT browser adapter (ChatGPT/Codex only).")
 @click.option("--organization", help="Explicit Claude organization ID.")
 @click.option("--limit", type=click.IntRange(1, 10000), default=100, show_default=True)
-def sync(product, session_file, organization, limit):
+@click.pass_context
+def sync(context, product, session_file, browser_account, organization, limit):
     """Cache normalized cloud history. Example: one-conv cloud sync chatgpt --limit 10.
 
-    Requires a broker-provisioned session; this command does not implement user login.
+    Uses a managed session or an explicitly selected existing browser account.
+    This command does not implement hosted user login.
     """
+    if browser_account is not None and session_file is not None:
+        raise click.UsageError("--browser-account and --session-file are mutually exclusive.")
     try:
-        provider = session_provider(product, session_file, organization)
+        if browser_account is not None:
+            provider = browser_provider(product, browser_account,
+                                        (context.obj or {}).get("browser_accounts"))
+        else:
+            provider = session_provider(product, session_file, organization)
         report = synchronize(provider, product, limit=limit)
     except ProviderError as error:
         raise click.ClickException(str(error)) from None

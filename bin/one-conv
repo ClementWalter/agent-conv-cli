@@ -92,6 +92,7 @@ import subprocess
 import sys
 import time
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1137,6 +1138,27 @@ CHATGPT_COOKIE_SOURCES = [
 # <kind><json>. They carry no prose, so they're stripped.
 _CHATGPT_PUA_RE = re.compile("\ue200.*?\ue201", re.DOTALL)
 _CHATGPT_PUA_STRAY_RE = re.compile("[\ue200-\ue206]")
+_KEYCHAIN_INTERACTION_LOCK = threading.Lock()
+
+
+def _keychain_copy_without_ui(security, query, result):
+    """Serialize process-wide suppression required by file-based macOS keychains."""
+    import ctypes as c
+    security.SecKeychainGetUserInteractionAllowed.argtypes = [c.POINTER(c.c_ubyte)]
+    security.SecKeychainGetUserInteractionAllowed.restype = c.c_int32
+    security.SecKeychainSetUserInteractionAllowed.argtypes = [c.c_ubyte]
+    security.SecKeychainSetUserInteractionAllowed.restype = c.c_int32
+    with _KEYCHAIN_INTERACTION_LOCK:
+        previous = c.c_ubyte()
+        if security.SecKeychainGetUserInteractionAllowed(c.byref(previous)) != 0:
+            return None
+        if security.SecKeychainSetUserInteractionAllowed(False) != 0:
+            return None
+        try:
+            status = security.SecItemCopyMatching(query, result)
+        finally:
+            restored = security.SecKeychainSetUserInteractionAllowed(previous.value)
+        return status if restored == 0 else None
 
 
 def _chatgpt_keychain_key(service: str) -> bytes | None:
@@ -1181,7 +1203,7 @@ def _silent_keychain_secret(service: str) -> bytes | None:
         query = cf.CFDictionaryCreate(None, keys, values, 4, None, None)
         result = c.c_void_p()
         try:
-            status = security.SecItemCopyMatching(query, c.byref(result))
+            status = _keychain_copy_without_ui(security, query, c.byref(result))
             if status != 0:
                 return None
             return c.string_at(cf.CFDataGetBytePtr(result), cf.CFDataGetLength(result))
@@ -3355,7 +3377,8 @@ def append(mouth: str, role: str, text: str, machine: str | None) -> None:
 def cloud_command(context):
     """Inspect and sync experimental session-based cloud adapters."""
     from one_conv.cloud_cli import cloud_group
-    cloud_group.main(args=context.args, prog_name=context.command_path, standalone_mode=False)
+    cloud_group.main(args=context.args, prog_name=context.command_path, standalone_mode=False,
+                    obj={"browser_accounts": _chatgpt_accounts})
 
 
 if __name__ == "__main__":
