@@ -2327,10 +2327,21 @@ _SOURCE_OPTION = click.option(
 @_SOURCE_OPTION
 @click.option("--limit", default=30, help="Number of projects to list.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
-def chats(source_filter: str | None, limit: int, as_json: bool) -> None:
+def chats(source_filter: str | None, limit: int, as_json: bool, conversations: bool = False) -> None:
     """List projects (channels) across every source, most recently active first."""
     sources = selected_sources(source_filter, SOURCES)
     state = _load_read_state()
+    if conversations:
+        handles = _all_sessions_for(list(_iter_all_projects(sources)))
+        rows = [_handle_summary(handle, state) for handle in handles]
+        # Provider timestamps reflect activity; cache file times reflect downloads.
+        rows.sort(key=lambda row: row["end"] or row["start"], reverse=True)
+        rows = rows[:limit] if limit else rows
+        if as_json:
+            click.echo(json.dumps(rows, ensure_ascii=False))
+        else:
+            _print_thread_rows(rows, show_cwd=True, show_unread_mark=True, show_source=True)
+        return
     projects = sorted(
         (_project_summary_handle(p, state) for p in _iter_all_projects(sources)),
         key=lambda s: s["last_active_epoch"],

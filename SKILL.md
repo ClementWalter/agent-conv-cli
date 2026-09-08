@@ -38,6 +38,11 @@ Every product exposes `connect`, `accounts`, `pull`, `chats`, `read`, `thread`, 
 `find` and `unread`. Pull contacts the provider. Readers and searches inspect
 saved history without contacting authentication services.
 
+`cloud chats` lists individual saved conversations across products; product
+`chats` commands restrict that list to one product. `--limit 0` lists all saved
+conversations. `cloud cached-accounts` lists account groups and cached counts;
+product `accounts` discovers accessible browser logins. Listing never pulls.
+
 ```bash
 one-conv cloud claude connect --browser chrome
 one-conv cloud claude accounts --json
@@ -87,7 +92,7 @@ one-conv local unread --json
 one-conv local skill-usage --json
 ```
 
-`chats` lists projects/accounts. `read QUERY` lists a project's conversations;
+`local chats` lists projects/accounts. `read QUERY` lists a project's conversations;
 `read QUERY --expand` includes their messages. `thread QUERY` reads one
 conversation, selecting the latest unless `--nth` or `--session` is supplied.
 `search` finds message text; `find` matches conversation titles.

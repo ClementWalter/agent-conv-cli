@@ -49,6 +49,14 @@ def _reader(command, sources, path):
                     "find": "Find saved conversations by title.",
                     "unread": "List saved conversations with unread activity."}
     result.help = descriptions.get(command.name, command.help)
+    if command.name == "chats" and set(sources).issubset(CLOUD_PRODUCTS.values()):
+        result.callback = lambda **kwargs: command.callback(conversations=True, **kwargs)
+        result.help = "List individual saved conversations, newest activity first. Run pull to fetch history."
+        for parameter in result.params:
+            if parameter.name == "limit":
+                parameter.type = click.IntRange(min=0)
+                parameter.help = "Number of conversations to list (0 = all)."
+                parameter.show_default = True
     example_args = " QUERY" if command.name in ("read", "thread", "search", "find", "fork", "port", "send") else ""
     result.epilog = f"\b\nExamples:\n  {path} {command.name}{example_args} --help"
     return result
@@ -88,6 +96,16 @@ def install(root, browser_accounts, claude_accounts):
     cloud.add_command(legacy_sync)
     for name in READ_COMMANDS:
         cloud.add_command(_reader(root.commands[name], cloud_sources, "one-conv cloud"))
+    cached_accounts = _reader(root.commands["chats"], cloud_sources, "one-conv cloud")
+    cached_accounts.name = "cached-accounts"
+    cached_accounts.callback = root.commands["chats"].callback
+    cached_accounts.help = "List saved account groups and their conversation counts without contacting providers."
+    cached_accounts.epilog = "Examples:\n  one-conv cloud cached-accounts --json"
+    for parameter in cached_accounts.params:
+        if parameter.name == "limit":
+            parameter.type = click.IntRange(min=1)
+            parameter.help = "Number of account groups to list."
+    cloud.add_command(cached_accounts)
     for name, product in CLOUD_PRODUCTS.items():
         group = click.Group(name, callback=_scope_callback((product,)),
                             help={"chatgpt": "ChatGPT web conversations.",

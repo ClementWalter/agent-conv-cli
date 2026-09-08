@@ -31,6 +31,54 @@ def test_root_lists_only_namespaces(app):
     assert [line.strip().split()[0] for line in commands.splitlines()] == ["cloud", "local"]
 
 
+@pytest.fixture
+def saved_conversations(app, monkeypatch, tmp_path):
+    account = tmp_path / "account"
+    account.mkdir()
+    (account / "first.json").write_text(json.dumps({
+        "source": "claude-chat", "session": "first", "cwd": "claude-chat:personal",
+        "title": "First conversation", "turns": [{"role": "user", "text": "Hello", "ts": "2026-01-01T00:00:00Z"}],
+    }))
+    (account / "second.json").write_text(json.dumps({
+        "source": "claude-chat", "session": "second", "cwd": "claude-chat:personal",
+        "title": "Second conversation", "turns": [{"role": "user", "text": "Hi", "ts": "2026-02-01T00:00:00Z"}],
+    }))
+    monkeypatch.setenv("ONE_CONV_CLOUD_CACHE", str(tmp_path))
+    monkeypatch.setattr(app, "_chatgpt_iter_projects", lambda: iter(()))
+    monkeypatch.setattr(app, "_claude_accounts", lambda: pytest.fail("Listing must stay offline"))
+    monkeypatch.setattr(app, "_chatgpt_accounts", lambda: pytest.fail("Listing must stay offline"))
+    os.utime(account / "first.json", (1900000000, 1900000000))
+    return tmp_path
+
+
+@pytest.mark.parametrize("path", [["cloud"], ["cloud", "claude"]])
+def test_cloud_chats_lists_conversations_by_activity(app, saved_conversations, path):
+    result = CliRunner().invoke(app.cli, [*path, "chats", "--json", "--limit", "0"])
+    assert [row["uuid"] for row in json.loads(result.output)] == ["second", "first"]
+
+
+def test_cloud_chats_limits_conversations(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "chats", "--json", "--limit", "1"])
+    assert [row["title"] for row in json.loads(result.output)] == ["Second conversation"]
+
+
+def test_cached_accounts_preserves_group_counts(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "cached-accounts", "--json"])
+    assert [(row["cwd"], row["threads"]) for row in json.loads(result.output)] == [("claude-chat:personal", 2)]
+
+
+def test_cloud_chats_human_output_has_titles(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--limit", "1"])
+    assert "Second conversation" in result.output
+
+
+def test_cloud_chats_process_lists_individual_conversations(saved_conversations):
+    result = subprocess.run([sys.executable, "-O", str(Path(__file__).parents[1] / "bin/one-conv"),
+                             "cloud", "claude", "chats", "--json"],
+                            capture_output=True, text=True, check=True, timeout=10)
+    assert [row["uuid"] for row in json.loads(result.stdout)] == ["second", "first"]
+
+
 def test_short_help_survives_legacy_help_cache(app):
     CliRunner().invoke(cloud_cli.cloud_group, ["--help"])
     namespaces.install(app.cli, lambda: iter(()), lambda: iter(()))

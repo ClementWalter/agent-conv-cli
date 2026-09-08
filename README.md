@@ -19,6 +19,11 @@ one-conv local search QUERY
 one-conv local thread PROJECT --source claude
 ```
 
+`cloud chats` lists individual saved conversations across products, newest activity
+first (default 30; `--limit 0` lists all). `cloud cached-accounts` lists saved
+account groups and counts. Product `accounts` commands discover browser logins;
+`pull` fetches history. Listing conversations does not contact providers.
+
 Each cloud product has `connect`, `accounts`, `pull`, `chats`, `read`, `thread`, `search`,
 `find`, and `unread`. Readers use saved history; only `pull` and account discovery
 contact providers. `local` never discovers cloud accounts. Product names remove
