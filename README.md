@@ -61,7 +61,8 @@ threads.
   Unread is local bookkeeping, same as Claude Code/Codex.
 - **ChatGPT web** — chatgpt.com has no local transcript store, so this is the
   one source that fetches over the network. The normal path needs no bulk
-  backfill at all: `chatgpt search` queries chatgpt.com's own index of the
+  backfill at all: `one-conv search` queries chatgpt.com's own index alongside local
+  transcripts. `chatgpt search` queries only the online index of the
   whole history, and `chatgpt sync --search "..."` (or `chatgpt sync <id>`)
   copies just those conversations down in seconds, since the id a search
   returns is the one the conversation endpoint takes. `chatgpt sync` with no
@@ -69,8 +70,8 @@ threads.
   conversations show up in offline, cross-source `search`/`read`, but never a
   prerequisite. It writes conversations into
   `~/.cache/one-conv-cli/chatgpt/<account>/` (override with
-  `$ONE_CONV_CHATGPT_CACHE`) and every read command works off that cache, so
-  `chats`/`read`/`search` stay offline and fast like the rest. There is nothing
+  `$ONE_CONV_CHATGPT_CACHE`). `chats` and `read` work from that cache;
+  `search --offline` limits search to local history. There is nothing
   to log into: the session is read straight out of a local Chromium profile's
   cookie store (Chrome/Arc/Brave/Edge, decrypted with the macOS keychain key),
   exactly as `notion-cli` and `rentalready-cli` do. Multi-account is native —
@@ -91,10 +92,10 @@ threads.
   limit is a quota, a large history needs several passes — `--until-complete`
   repeats them on a timer until nothing is outstanding — but since a scoped
   sync already reaches anything on demand, the unscoped one is a convenience,
-  not a milestone to wait for. Note the split: `chatgpt search`
-  hits chatgpt.com live and reaches everything, marking hits the cache is
-  missing; `one-conv search` is the offline full-text search over what has
-  been cached, across every source at once.
+  not a milestone to wait for. `one-conv search` combines local full-text matches
+  and live ChatGPT matches by default. `--offline` skips online discovery.
+  Keychain reads never prompt; unavailable online accounts and failed searches
+  are reported on stderr while local results remain available.
 
 Every backend normalizes into the same `Turn(ts, role, blocks)` shape, so
 rendering/cleaning/search work identically regardless of source. The same

@@ -535,3 +535,25 @@ def test_a_rate_limited_target_is_not_written_to_the_cache(targeted_sync, tmp_pa
 def test_a_rate_limited_target_says_to_retry(targeted_sync) -> None:
     result, _ = targeted_sync(["conv-1"], outcome="quota")
     assert "retry later" in result.output
+
+
+def test_default_search_includes_uncached_online_history(monkeypatch):
+    monkeypatch.setattr(ac, "_sessions_for_scope", lambda *args: [])
+    monkeypatch.setattr(ac, "_cursor_composer_ids_matching", lambda text: set())
+    monkeypatch.setattr(ac, "_chatgpt_accounts", lambda: [{"email": "owner@example.test", "session": object()}])
+    monkeypatch.setattr(ac, "_chatgpt_remote_search", lambda *args, **kwargs: [{"conversation_id": "online-only", "payload": {"snippet": "needle"}}])
+    result = click.testing.CliRunner().invoke(ac.cli, ["search", "needle", "--json"])
+    assert json.loads(result.stdout)[0]["session"] == "online-only"
+
+
+def test_offline_search_never_opens_online_accounts(monkeypatch):
+    monkeypatch.setattr(ac, "_sessions_for_scope", lambda *args: [])
+    monkeypatch.setattr(ac, "_cursor_composer_ids_matching", lambda text: set())
+    monkeypatch.setattr(ac, "_chatgpt_accounts", lambda: pytest.fail("Offline search must not access online accounts"))
+    result = click.testing.CliRunner().invoke(ac.cli, ["search", "needle", "--offline", "--json"])
+    assert json.loads(result.stdout) == []
+
+
+def test_strict_search_reports_online_failure():
+    with pytest.raises(RuntimeError, match="Online conversation search is unavailable"):
+        ac._chatgpt_remote_search(_StubSession([429] * 10), "query", 30, strict=True)

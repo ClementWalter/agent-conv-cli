@@ -1134,24 +1134,58 @@ _CHATGPT_PUA_STRAY_RE = re.compile("[\ue200-\ue206]")
 
 
 def _chatgpt_keychain_key(service: str) -> bytes | None:
-    """The AES key Chromium derives from its keychain secret on macOS."""
+    """Derive the cookie key only when Keychain permits access without prompting."""
     try:
         from Crypto.Protocol.KDF import PBKDF2
     except ImportError:
         return None
-    try:
-        proc = subprocess.run(
-            ["security", "find-generic-password", "-w", "-s", service],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
+    secret = _silent_keychain_secret(service)
+    if secret is None:
         return None
     return PBKDF2(
-        proc.stdout.strip().encode(), b"saltysalt", 16, count=1003,
+        secret, b"saltysalt", 16, count=1003,
         prf=lambda p, s: hmac.new(p, s, hashlib.sha1).digest(),
     )
+
+
+def _silent_keychain_secret(service: str) -> bytes | None:
+    """Background history discovery must never present a system password dialog."""
+    if sys.platform != "darwin":
+        return None
+    import ctypes as c
+    try:
+        cf = c.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        security = c.CDLL("/System/Library/Frameworks/Security.framework/Security")
+        cf.CFStringCreateWithCString.argtypes = [c.c_void_p, c.c_char_p, c.c_uint32]
+        cf.CFStringCreateWithCString.restype = c.c_void_p
+        cf.CFDictionaryCreate.argtypes = [c.c_void_p, c.POINTER(c.c_void_p), c.POINTER(c.c_void_p), c.c_long, c.c_void_p, c.c_void_p]
+        cf.CFDictionaryCreate.restype = c.c_void_p
+        cf.CFRelease.argtypes = [c.c_void_p]
+        cf.CFDataGetLength.argtypes = [c.c_void_p]
+        cf.CFDataGetLength.restype = c.c_long
+        cf.CFDataGetBytePtr.argtypes = [c.c_void_p]
+        cf.CFDataGetBytePtr.restype = c.c_void_p
+        security.SecItemCopyMatching.argtypes = [c.c_void_p, c.POINTER(c.c_void_p)]
+        security.SecItemCopyMatching.restype = c.c_int32
+        def symbol(name):
+            return c.c_void_p.in_dll(security, name).value
+        name = cf.CFStringCreateWithCString(None, service.encode(), 0x08000100)
+        keys = (c.c_void_p * 4)(*[symbol(key) for key in ("kSecClass", "kSecAttrService", "kSecReturnData", "kSecUseAuthenticationUI")])
+        values = (c.c_void_p * 4)(symbol("kSecClassGenericPassword"), name, c.c_void_p.in_dll(cf, "kCFBooleanTrue").value, symbol("kSecUseAuthenticationUIFail"))
+        query = cf.CFDictionaryCreate(None, keys, values, 4, None, None)
+        result = c.c_void_p()
+        try:
+            status = security.SecItemCopyMatching(query, c.byref(result))
+            if status != 0:
+                return None
+            return c.string_at(cf.CFDataGetBytePtr(result), cf.CFDataGetLength(result))
+        finally:
+            if result.value:
+                cf.CFRelease(result)
+            cf.CFRelease(query)
+            cf.CFRelease(name)
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def _chatgpt_decrypt_cookie(encrypted: bytes, key: bytes) -> str | None:
@@ -1635,7 +1669,7 @@ def _chatgpt_store_conversation(account_dir: Path, cid: str, doc: dict, title: s
     return dest
 
 
-def _chatgpt_remote_search(session, query: str, limit: int) -> list[dict]:
+def _chatgpt_remote_search(session, query: str, limit: int, *, strict: bool = False) -> list[dict]:
     """Search chatgpt.com's own index of the account's conversations.
 
     This is the one read that does not need a sync: the server matches across
@@ -1654,6 +1688,8 @@ def _chatgpt_remote_search(session, query: str, limit: int) -> list[dict]:
             session, f"{CHATGPT_HOST}/backend-api/conversations/search?{urlencode(params)}"
         )
         if resp is None or resp.status_code != 200:
+            if strict:
+                raise RuntimeError("Online conversation search is unavailable; local results are still shown")
             break
         payload = resp.json() or {}
         items = payload.get("items") or []
@@ -2457,13 +2493,39 @@ def _sessions_for_scope(project_query: str | None, sources: tuple[str, ...]) -> 
     return _all_sessions_for(projects)
 
 
+def _online_search(text: str, limit: int, project_query: str | None = None) -> list[dict]:
+    """Online hits use the same result shape as local turns, without a preceding sync."""
+    rows = []
+    try:
+        accounts = list(_chatgpt_accounts())
+        if not accounts:
+            log.warning("No online ChatGPT account is available without authorization; showing local history")
+        for auth in accounts:
+            cwd = f"chatgpt:{auth['email']}"
+            if project_query and project_query.lower() not in cwd.lower():
+                continue
+            try:
+                hits = _chatgpt_remote_search(auth["session"], text, limit, strict=True)
+            except Exception:
+                log.warning("Online search is incomplete for one connected account; local results are preserved")
+                continue
+            for hit in hits:
+                rows.append({"source": "chatgpt", "cwd": cwd, "session": hit.get("conversation_id") or "",
+                             "role": "match", "text": _chatgpt_clean((hit.get("payload") or {}).get("snippet") or hit.get("title") or ""),
+                             "ts": datetime.fromtimestamp(_chatgpt_epoch(hit.get("update_time")), tz=timezone.utc).isoformat() if hit.get("update_time") else ""})
+    except Exception:
+        log.warning("Online account discovery is unavailable; local results are preserved")
+    return rows
+
+
 @cli.command()
 @click.argument("text")
 @_SOURCE_OPTION
 @click.option("--project", "project_query", help="Restrict to projects matching this query (default: all).")
-@click.option("--limit", default=50, help="Number of matches to show.")
+@click.option("--limit", default=50, type=click.IntRange(min=1), help="Number of matches to show.")
+@click.option("--offline", is_flag=True, help="Search saved history only, without contacting online providers.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
-def search(text: str, source_filter: str | None, project_query: str | None, limit: int, as_json: bool) -> None:
+def search(text: str, source_filter: str | None, project_query: str | None, limit: int, offline: bool, as_json: bool) -> None:
     """Full-text search across session transcripts, across every source.
 
     A cheap pre-filter runs before any full parsing — a raw-bytes substring
@@ -2509,7 +2571,10 @@ def search(text: str, source_filter: str | None, project_query: str | None, limi
         if len(results) >= limit:
             break
 
-    results.sort(key=lambda r: r["ts"], reverse=True)
+    if not offline and (source_filter is None or source_filter == "chatgpt"):
+        results.extend(_online_search(text, limit, project_query))
+    unique = {(row["source"], row["cwd"], row["session"], row["text"]): row for row in results}
+    results = sorted(unique.values(), key=lambda r: r["ts"], reverse=True)[:limit]
     if as_json:
         click.echo(json.dumps(results, ensure_ascii=False))
         return

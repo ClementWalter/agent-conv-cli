@@ -189,10 +189,13 @@ Subagent/sidechain forks (Claude Code only) are excluded unless
 everything, including thinking and full tool_use/tool_result detail. Marks
 the thread read (see `unread`) unless `--no-mark-read` is passed.
 
-### `one-conv search <text> [--source S] [--project QUERY] [--limit N] [--json]`
+### `one-conv search <text> [--source S] [--project QUERY] [--limit N] [--offline] [--json]`
 
-Full-text search across every source's transcripts (or scoped with
-`--project`/`--source`). A cheap pre-filter runs before any full parsing — a
+Search local transcripts and connected ChatGPT accounts together, without a
+preceding sync or provider-specific command. Use `--offline` to skip network
+access. Online failures are reported on stderr while local results are retained;
+Keychain access never opens a password prompt. Scope with `--project`/`--source`.
+A cheap pre-filter runs before any full parsing — a
 raw-bytes substring check for Claude Code/Codex's flat JSONL files, one
 batched SQL `LIKE` query for Cursor's SQLite store (no single-file check is
 possible there) — so searching everywhere stays fast even with a lot of
