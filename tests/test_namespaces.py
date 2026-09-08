@@ -101,6 +101,34 @@ def test_cloud_chats_process_lists_individual_conversations(saved_conversations)
     assert [row["uuid"] for row in json.loads(result.stdout)] == ["second", "first"]
 
 
+@pytest.mark.parametrize("path", [["cloud", "read"], ["cloud", "chat"], ["cloud", "thread"], ["cloud", "claude", "read"]])
+def test_cloud_read_opens_displayed_id(app, saved_conversations, path):
+    result = CliRunner().invoke(app.cli, [*path, "sec", "--json", "--no-mark-read"])
+    assert json.loads(result.stdout)["turns"][0]["text"] == "Hi"
+
+
+def test_cloud_read_matches_title(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "read", "Second conversation", "--json", "--no-mark-read"])
+    assert json.loads(result.stdout)["session"] == "second"
+
+
+def test_cloud_read_rejects_ambiguous_title(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "read", "conversation", "--no-mark-read"])
+    assert "Several conversations match" in result.stderr
+
+
+def test_cloud_read_refresh_is_available(app):
+    result = CliRunner().invoke(app.cli, ["cloud", "read", "--help"])
+    assert "--refresh" in result.stdout
+
+
+def test_cloud_read_process_resolves_id(saved_conversations):
+    result = subprocess.run([sys.executable, "-O", str(Path(__file__).parents[1] / "bin/one-conv"),
+                             "cloud", "read", "sec", "--json", "--no-mark-read"],
+                            capture_output=True, text=True, check=True, timeout=10)
+    assert json.loads(result.stdout)["session"] == "second"
+
+
 def test_short_help_survives_legacy_help_cache(app):
     CliRunner().invoke(cloud_cli.cloud_group, ["--help"])
     namespaces.install(app.cli, lambda: iter(()), lambda: iter(()))

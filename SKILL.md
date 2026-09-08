@@ -41,6 +41,10 @@ saved history without contacting authentication services.
 `cloud chats` lists individual saved conversations across products; product
 `chats` commands restrict that list to one product. `--limit 0` lists all saved
 conversations. `cloud cached-accounts` lists account groups and cached counts;
+`cloud read ID` opens a conversation using the displayed ID prefix or a unique
+title; `cloud chat ID` and `cloud thread ID` are aliases. Product readers use the
+same conversation lookup. Ambiguous matches require a longer ID. `--no-mark-read`
+preserves unread status. Cloud read no longer takes an account/project query.
 product `accounts` discovers accessible browser logins. Listing never pulls.
 Every cloud reader identifies saved history on stderr, keeping JSON stdout clean.
 Product readers accept `--refresh` to pull up to 100 conversations before reading;

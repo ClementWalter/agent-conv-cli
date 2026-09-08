@@ -49,6 +49,10 @@ def _reader(command, sources, path):
                     "find": "Find saved conversations by title.",
                     "unread": "List saved conversations with unread activity."}
     result.help = descriptions.get(command.name, command.help)
+    if command.name == "thread" and set(sources).issubset(CLOUD_PRODUCTS.values()):
+        result.params = [parameter for parameter in result.params if parameter.name not in ("session_uuid", "nth", "match")]
+        result.callback = lambda **kwargs: command.callback(direct_query=True, session_uuid=None, nth=1, match=0, **kwargs)
+        result.help = "Read a conversation by the ID shown in chats, or by its title."
     if command.name == "chats" and set(sources).issubset(CLOUD_PRODUCTS.values()):
         result.callback = lambda **kwargs: command.callback(conversations=True, **kwargs)
         result.help = "List individual saved conversations, newest activity first. Run pull to fetch history."
@@ -82,7 +86,7 @@ def _reader(command, sources, path):
             return callback(**kwargs)
 
         result.callback = read_saved
-        if len(sources) == 1 or command.name == "chats":
+        if len(sources) == 1 or command.name in ("chats", "thread"):
             result.params.append(click.Option(["--refresh"], is_flag=True,
                 help="Refresh accessible supported accounts first (up to 100 conversations each); fail on refresh errors."))
     return result
@@ -159,7 +163,15 @@ def install(root, browser_accounts, claude_accounts):
     legacy_sync.hidden = True
     cloud.add_command(legacy_sync)
     for name in READ_COMMANDS:
-        cloud.add_command(_reader(root.commands[name], cloud_sources, "one-conv cloud"))
+        reader = _reader(root.commands["thread" if name == "read" else name], cloud_sources, "one-conv cloud")
+        reader.name = name
+        if name in ("read", "thread"):
+            reader.epilog = f"Examples:\n  one-conv cloud {name} ID\n  one-conv cloud {name} ID --refresh"
+        cloud.add_command(reader)
+    chat_alias = copy(cloud.commands["read"])
+    chat_alias.name = "chat"
+    chat_alias.epilog = "Examples:\n  one-conv cloud chat ID"
+    cloud.add_command(chat_alias)
     cached_accounts = _reader(root.commands["chats"], cloud_sources, "one-conv cloud")
     cached_accounts.name = "cached-accounts"
     cached_accounts.callback = root.commands["chats"].callback
@@ -180,7 +192,11 @@ def install(root, browser_accounts, claude_accounts):
                             context_settings=HELP_SETTINGS,
                             epilog=f"\b\nExamples:\n  one-conv cloud {name} accounts\n  one-conv cloud {name} pull --help\n  one-conv cloud {name} chats")
         for reader in READ_COMMANDS:
-            group.add_command(_reader(root.commands[reader], (product,), f"one-conv cloud {name}"))
+            scoped = _reader(root.commands["thread" if reader == "read" else reader], (product,), f"one-conv cloud {name}")
+            scoped.name = reader
+            if reader in ("read", "thread"):
+                scoped.epilog = f"Examples:\n  one-conv cloud {name} {reader} ID"
+            group.add_command(scoped)
         group.add_command(_pull(sync, name, product))
         group.add_command(_accounts(name))
         group.add_command(_connect(name))

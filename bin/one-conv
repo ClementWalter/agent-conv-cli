@@ -2355,6 +2355,7 @@ def chats(source_filter: str | None, limit: int, as_json: bool, conversations: b
         else:
             _print_thread_rows(rows, show_cwd=True, show_unread_mark=True, show_source=True)
             click.echo("● Unread in one-conv (independent of the provider's read status).", err=True)
+            click.echo("Read a conversation: one-conv cloud read ID", err=True)
         return
     projects = sorted(
         (_project_summary_handle(p, state) for p in _iter_all_projects(sources)),
@@ -2461,6 +2462,7 @@ def thread(
     include_subagents: bool,
     no_mark_read: bool,
     as_json: bool,
+    direct_query: bool = False,
 ) -> None:
     """Read one thread in full, from the project matching QUERY — Slack's
     `thread <channel> <ts>`, with a UUID/--nth position standing in for
@@ -2474,9 +2476,24 @@ def thread(
     read (see `unread`) unless --no-mark-read is passed.
     """
     sources = selected_sources(source_filter, SOURCES)
-    projects = _resolve_projects(query, match, sources)
-    sessions = _all_sessions_for(projects)
-    handle = _pick_session_handle(sessions, session_uuid, nth)
+    if direct_query:
+        sessions = _all_sessions_for(list(_iter_all_projects(sources)))
+        # Displayed ID prefixes resolve before titles, independent of account groups.
+        matches = [handle for handle in sessions if handle.uuid.startswith(query)]
+        if not matches:
+            matches = [handle for handle in sessions if _handle_title(handle).casefold() == query.casefold()]
+        if not matches:
+            matches = [handle for handle in sessions if query.casefold() in _handle_title(handle).casefold()]
+        if not matches:
+            raise click.ClickException(f"No saved conversation matches {query!r}. Run one-conv cloud chats --refresh.")
+        if len(matches) != 1:
+            choices = "; ".join(f"{handle.uuid} [{handle.source}] {_handle_title(handle)}" for handle in matches[:10])
+            raise click.ClickException(f"Several conversations match {query!r}; use a longer ID: {choices}")
+        handle = matches[0]
+    else:
+        projects = _resolve_projects(query, match, sources)
+        sessions = _all_sessions_for(projects)
+        handle = _pick_session_handle(sessions, session_uuid, nth)
     out = _handle_rendered_turns(handle, raw, include_subagents, limit)
     title = _handle_title(handle)
     tokens = _handle_token_total(handle)
