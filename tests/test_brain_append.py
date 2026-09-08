@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-loader = importlib.machinery.SourceFileLoader("agent_conv_append_test", str(Path(__file__).parent.parent / "bin/agent-conv"))
+loader = importlib.machinery.SourceFileLoader("agent_conv_append_test", str(Path(__file__).parent.parent / "bin/one-conv"))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 ac = importlib.util.module_from_spec(spec)
 sys.modules[loader.name] = ac

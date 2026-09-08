@@ -1,32 +1,32 @@
 ---
-name: agent-conv-cli
+name: one-conv-cli
 description:
   "Read your own Claude Code / Codex CLI / Cursor / Oh My Pi / ChatGPT web conversation
-  history from the terminal via the bundled `agent-conv` command — one unified
+  history from the terminal via the bundled `one-conv` command — one unified
   reader across all five. Same shape as Slack, one level up: a project is a
-  channel, a session IS a thread. `agent-conv chats` lists projects/channels
-  across every source, most recently active first, tagged. `agent-conv read
+  channel, a session IS a thread. `one-conv chats` lists projects/channels
+  across every source, most recently active first, tagged. `one-conv read
   <query>` mirrors Slack's `read <channel>`: bare, it lists every thread's
   anchor (title/turns/timestamp, no content); `--expand` inlines every
   thread's full content, like `--expand-thread`. A query that exactly names
   one real directory merges every source's threads for it into one list.
-  `agent-conv thread <query>` mirrors Slack's `thread <channel> <ts>`: reads
+  `one-conv thread <query>` mirrors Slack's `thread <channel> <ts>`: reads
   exactly one thread in full (defaults to the most recent; `--nth`/`--session`
   to pick another). `--source claude|codex|cursor|omp|chatgpt` scopes any command to one
-  backend. `agent-conv chatgpt sync` pulls chatgpt.com web chats into a local
+  backend. `one-conv chatgpt sync` pulls chatgpt.com web chats into a local
   cache (there is no local store to read, and no login: the session is read
   out of a local Chromium profile); every other command then reads that cache
   offline. Multi-account is native — each signed-in browser profile is swept
-  and cached separately under `chatgpt:<email>`. `agent-conv search <text>` full-text-searches across everything;
-  `agent-conv find <text>` locates a thread by its derived title (name)
-  across every project. `agent-conv fork <query>` hands off to `claude
+  and cached separately under `chatgpt:<email>`. `one-conv search <text>` full-text-searches across everything;
+  `one-conv find <text>` locates a thread by its derived title (name)
+  across every project. `one-conv fork <query>` hands off to `claude
   --resume --fork-session` to continue a past Claude Code thread as a new one
   interactively (dry-run by default; Claude-only — Codex/Cursor have no
-  equivalent CLI hook). `agent-conv send <query> <message>` does the same
+  equivalent CLI hook). `one-conv send <query> <message>` does the same
   headlessly and prints the reply, appending to that same thread unless
-  `--fork` is passed (dry-run by default). `agent-conv unread` lists threads
+  `--fork` is passed (dry-run by default). `one-conv unread` lists threads
   with activity you haven't seen yet (Claude Code/Codex/OMP: local bookkeeping;
-  Cursor: its own native unread flag, read directly). `agent-conv skill-usage`
+  Cursor: its own native unread flag, read directly). `one-conv skill-usage`
   tallies every Skill-tool invocation across all Claude Code history — count,
   last-used timestamp, and (in `--json`) per-invocation session/cwd pointers
   to drill into how a skill actually got used. No auth, no network —
@@ -65,20 +65,20 @@ rendering, cleaning, and search all work identically regardless of source.
 
 ## How to invoke
 
-Invoke it as **`agent-conv`** — on `$PATH` via a symlink in `~/.local/bin` onto this
-repo's `bin/agent-conv`, so it always runs the current checkout: a `git pull`, or even
+Invoke it as **`one-conv`** — on `$PATH` via a symlink in `~/.local/bin` onto this
+repo's `bin/one-conv`, so it always runs the current checkout: a `git pull`, or even
 an uncommitted edit, takes effect immediately with nothing to reinstall.
 
 ```bash
-agent-conv chats
+one-conv chats
 ```
 
-Examples in this doc are written that way. If `agent-conv` is not on `$PATH`, run the
-bundled launcher `bin/agent-conv` resolved against this skill's own directory (PEP 723
+Examples in this doc are written that way. If `one-conv` is not on `$PATH`, run the
+bundled launcher `bin/one-conv` resolved against this skill's own directory (PEP 723
 — `uv` resolves deps inline on first run), or link it once:
 
 ```bash
-ln -sfn <skill-dir>/bin/agent-conv ~/.local/bin/agent-conv
+ln -sfn <skill-dir>/bin/one-conv ~/.local/bin/one-conv
 ```
 
 ## Mental model
@@ -88,7 +88,7 @@ in) is a **channel**, and a **session** IS a **thread** — an anchor message
 (its first turn) plus every turn tied to it. The command set mirrors Slack's
 exactly, across all five sources at once:
 
-| Slack | agent-conv-cli |
+| Slack | one-conv-cli |
 |---|---|
 | `channels` | `chats` |
 | `read <channel>` (flat) | bare `read <query>` (every thread's anchor) |
@@ -127,25 +127,25 @@ dry-run, same convention as the personal-messaging CLIs' `send` commands.
 
 ## Commands
 
-### `agent-conv chats [--source S] [--limit N] [--json]`
+### `one-conv chats [--source S] [--limit N] [--json]`
 
 List projects (channels) across every source, most recently active first:
 real cwd, which source, thread count, last-active timestamp, and an unread
 count when nonzero (see `unread`). The *same* real directory can appear as
 several rows — one per source that has history there.
 
-### `agent-conv read <query> [--source S] [--expand] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
+### `one-conv read <query> [--source S] [--expand] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
 
 The channel's top-level view — never targets a single thread (use `thread`
 for that). Searches all four sources at once unless `--source` narrows it;
 an exact directory-name match merges every source's threads for it:
 
 ```bash
-agent-conv read myproject                     # every thread's anchor, across all sources for that project
-agent-conv read myproject --source cursor     # same, but only Cursor's threads
-agent-conv read myproject --expand            # every thread's FULL content, one after another
-agent-conv read myproject --expand --limit 5  # cap to the 5 most recent threads in expand mode
-agent-conv read myproject --raw               # (with --expand) include thinking + tool_use/tool_result
+one-conv read myproject                     # every thread's anchor, across all sources for that project
+one-conv read myproject --source cursor     # same, but only Cursor's threads
+one-conv read myproject --expand            # every thread's FULL content, one after another
+one-conv read myproject --expand --limit 5  # cap to the 5 most recent threads in expand mode
+one-conv read myproject --raw               # (with --expand) include thinking + tool_use/tool_result
 ```
 
 Bare, `--limit` caps how many threads are *listed*; with `--expand`, `--limit`
@@ -154,7 +154,7 @@ mode — use `thread --limit` for that). Bare mode never marks anything read
 (no content was actually shown); `--expand` marks every thread it renders as
 read (see `unread`) unless `--no-mark-read` is passed.
 
-### `agent-conv thread <query> [--source S] [--session UUID | --nth N] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
+### `one-conv thread <query> [--source S] [--session UUID | --nth N] [--limit N] [--match N] [--raw] [--include-subagents] [--no-mark-read] [--json]`
 
 Read exactly one thread in full — Slack's `thread <channel> <ts>`, standing
 in a UUID or position (`--nth`) for the `ts` Slack would use. When a query
@@ -162,12 +162,12 @@ merges threads from multiple sources, `--nth` ranks across all of them by
 recency together:
 
 ```bash
-agent-conv thread myproject                    # most recently active thread, any source, in full
-agent-conv thread myproject --source codex     # most recent Codex thread specifically
-agent-conv thread myproject --nth 2            # the thread before that
-agent-conv thread myproject --session a1b2c3d4 # an exact thread (session UUID / composerId prefix)
-agent-conv thread myproject --limit 20         # only its last 20 turns
-agent-conv thread myproject --raw              # include thinking + tool_use/tool_result blocks
+one-conv thread myproject                    # most recently active thread, any source, in full
+one-conv thread myproject --source codex     # most recent Codex thread specifically
+one-conv thread myproject --nth 2            # the thread before that
+one-conv thread myproject --session a1b2c3d4 # an exact thread (session UUID / composerId prefix)
+one-conv thread myproject --limit 20         # only its last 20 turns
+one-conv thread myproject --raw              # include thinking + tool_use/tool_result blocks
 ```
 
 Compact mode (default) shows only genuine assistant prose and user text.
@@ -189,7 +189,7 @@ Subagent/sidechain forks (Claude Code only) are excluded unless
 everything, including thinking and full tool_use/tool_result detail. Marks
 the thread read (see `unread`) unless `--no-mark-read` is passed.
 
-### `agent-conv search <text> [--source S] [--project QUERY] [--limit N] [--json]`
+### `one-conv search <text> [--source S] [--project QUERY] [--limit N] [--json]`
 
 Full-text search across every source's transcripts (or scoped with
 `--project`/`--source`). A cheap pre-filter runs before any full parsing — a
@@ -199,7 +199,7 @@ possible there) — so searching everywhere stays fast even with a lot of
 history. Matches anywhere in a transcript, one row per matching turn — for a
 title-only, one-row-per-thread search see `find`.
 
-### `agent-conv find <text> [--source S] [--limit N] [--json]`
+### `one-conv find <text> [--source S] [--limit N] [--json]`
 
 Find a thread **by name** — i.e. by its derived title — across every project
 and source. Only Cursor stores a real thread title; Claude Code/Codex don't,
@@ -208,13 +208,13 @@ so "name" there is the first substantive thing you said in it (same text
 per matching turn), `find` matches only the title and returns one row per
 thread, most recently active first.
 
-### `agent-conv unread [--source S] [--project QUERY] [--limit N] [--mark-all-read] [--json]`
+### `one-conv unread [--source S] [--project QUERY] [--limit N] [--mark-all-read] [--json]`
 
 List threads with activity you haven't seen yet, most recently active first,
 across every source. Claude Code and Codex have no concept of read/unread, so
 those two are tracked via local bookkeeping
-(`~/.config/agent-conv-cli/read-state.json`, override with
-`$AGENT_CONV_STATE_DIR`): a thread counts as unread until you view its full
+(`~/.config/one-conv-cli/read-state.json`, override with
+`$ONE_CONV_STATE_DIR`): a thread counts as unread until you view its full
 content via `thread` or `read --expand` (or catch up in bulk with
 `--mark-all-read`), same as a message you've never opened, and new activity
 since the last time makes it unread again. **Cursor already tracks its own
@@ -223,10 +223,10 @@ unread state natively** — that flag is read directly and never written to;
 its own flag).
 
 ```bash
-agent-conv unread                        # everything unread, across every project and source
-agent-conv unread --project myproject    # scoped to one project
-agent-conv unread --source claude        # scoped to one backend
-agent-conv unread --mark-all-read        # catch up in bulk instead of listing (claude/codex only)
+one-conv unread                        # everything unread, across every project and source
+one-conv unread --project myproject    # scoped to one project
+one-conv unread --source claude        # scoped to one backend
+one-conv unread --mark-all-read        # catch up in bulk instead of listing (claude/codex only)
 ```
 
 The first run will likely show your whole Claude Code/Codex history as
@@ -234,12 +234,12 @@ unread (nothing has ever been marked read yet) — run `unread --mark-all-read`
 once to start clean, then normal usage keeps it current. `chats` shows a
 per-project unread count and bare `read` prefixes unread rows with `●`.
 
-### `agent-conv chatgpt sync [IDS...] [--search TEXT] [--limit N] [--refresh] [--assets] [--until-complete] [--wait SECS] [--max-rounds N] [--account ID|EMAIL] [--json]`
+### `one-conv chatgpt sync [IDS...] [--search TEXT] [--limit N] [--refresh] [--assets] [--until-complete] [--wait SECS] [--max-rounds N] [--account ID|EMAIL] [--json]`
 
 **ChatGPT only** — the other four sources write transcripts to disk, so they
 are read live; chatgpt.com keeps nothing locally, so its chats have to be
-pulled first. Sync writes them to `~/.cache/agent-conv-cli/chatgpt/<account>/`
-(override with `$AGENT_CONV_CHATGPT_CACHE`), and every other command reads
+pulled first. Sync writes them to `~/.cache/one-conv-cli/chatgpt/<account>/`
+(override with `$ONE_CONV_CHATGPT_CACHE`), and every other command reads
 that cache — offline, and with no browser needed.
 
 There is nothing to log into. The session is read straight out of a local
@@ -252,11 +252,11 @@ personal account sync side by side into separate caches. An account already
 synced stays readable after you sign out of it — the cache is the history.
 
 ```bash
-agent-conv chatgpt accounts                    # who is cached / who is signed in where
-agent-conv chatgpt sync                        # every signed-in account
-agent-conv chatgpt sync --account me@gmail.com # just one
-agent-conv chatgpt sync --refresh              # refetch bodies even when unchanged
-agent-conv read "chatgpt:me@gmail.com"         # then read it like any other channel
+one-conv chatgpt accounts                    # who is cached / who is signed in where
+one-conv chatgpt sync                        # every signed-in account
+one-conv chatgpt sync --account me@gmail.com # just one
+one-conv chatgpt sync --refresh              # refetch bodies even when unchanged
+one-conv read "chatgpt:me@gmail.com"         # then read it like any other channel
 ```
 
 **Attachments.** Uploads and inline images are always named in the transcript
@@ -274,9 +274,9 @@ deferred, so "gone" never hides "try again later".
 single job; only the selection differs, so it is a single command:
 
 ```bash
-agent-conv chatgpt sync --search "assurance habitation"  # just those (seconds)
-agent-conv chatgpt sync 690326c8-...                     # just these ids
-agent-conv chatgpt sync                                  # the whole account (hours)
+one-conv chatgpt sync --search "assurance habitation"  # just those (seconds)
+one-conv chatgpt sync 690326c8-...                     # just these ids
+one-conv chatgpt sync                                  # the whole account (hours)
 ```
 
 A scoped sync skips the account listing entirely and answers in seconds — it
@@ -287,7 +287,7 @@ and will make a scoped one crawl; do one or the other.
 
 **An unscoped sync is an optimisation, not a prerequisite.** `chatgpt search` plus a scoped sync
 already reach the entire history on demand. The bulk form exists so
-conversations land in the offline, cross-source `agent-conv search`/`read`
+conversations land in the offline, cross-source `one-conv search`/`read`
 without a round trip — useful, but not something to wait on.
 
 **Expect a big history to need many passes.** chatgpt.com allows only a
@@ -307,10 +307,10 @@ than retrying them forever. Interrupting it is safe — the cache is the
 progress.
 
 ```bash
-agent-conv chatgpt sync --assets --until-complete   # the unattended full sync
+one-conv chatgpt sync --assets --until-complete   # the unattended full sync
 ```
 
-### `agent-conv chatgpt search <text> [--limit N] [--account ID|EMAIL] [--json]`
+### `one-conv chatgpt search <text> [--limit N] [--account ID|EMAIL] [--json]`
 
 **ChatGPT only, and the primary way to read this source.** Asks chatgpt.com to
 search its own index of the account, so it matches across the entire history —
@@ -324,15 +324,15 @@ backfill is never required. Note the distinction:
 
 | | reads | covers |
 |---|---|---|
-| `agent-conv search <text>` | the local cache, offline | every source, but only what is synced |
-| `agent-conv chatgpt search <text>` | chatgpt.com, live | the whole ChatGPT history |
+| `one-conv search <text>` | the local cache, offline | every source, but only what is synced |
+| `one-conv chatgpt search <text>` | chatgpt.com, live | the whole ChatGPT history |
 
 ```bash
-agent-conv chatgpt search "assurance habitation"
-agent-conv chatgpt search "recette" --limit 50 --json
+one-conv chatgpt search "assurance habitation"
+one-conv chatgpt search "recette" --limit 50 --json
 ```
 
-### `agent-conv skill-usage [--since-days N] [--recent N] [--json]`
+### `one-conv skill-usage [--since-days N] [--recent N] [--json]`
 
 **Claude Code only** — Codex and Cursor have no equivalent "Skill" tool
 concept. Tallies every `Skill` tool invocation across every project's
@@ -343,15 +343,15 @@ needs to scan subagent/sidechain turns. Reports one row per distinct skill
 name actually invoked — count and most recent use, most recently used first:
 
 ```bash
-agent-conv skill-usage                     # every skill ever invoked: count + last-used timestamp
-agent-conv skill-usage --since-days 30     # only sessions touched in the last 30 days
-agent-conv skill-usage --json              # machine-readable, includes drill-down pointers
-agent-conv skill-usage --json --recent 10  # keep the last 10 invocations' pointers per skill (default 5)
+one-conv skill-usage                     # every skill ever invoked: count + last-used timestamp
+one-conv skill-usage --since-days 30     # only sessions touched in the last 30 days
+one-conv skill-usage --json              # machine-readable, includes drill-down pointers
+one-conv skill-usage --json --recent 10  # keep the last 10 invocations' pointers per skill (default 5)
 ```
 
 In `--json`, each row also carries `recent`: its last N invocations'
 `session`/`cwd`/`ts`, enough to jump straight to the transcript right after a
-given load — `agent-conv thread <cwd> --source claude --session <uuid>` (add
+given load — `one-conv thread <cwd> --source claude --session <uuid>` (add
 `--match N` if that `cwd` is ambiguous among nested worktrees) — to actually
 judge how the skill got used (one clean action vs. floundering, unclear
 back-and-forth), not just whether it got used at all. Text mode only prints
@@ -364,7 +364,7 @@ only reports what got *used*; it has no notion of which skills are currently
 installed, so pair it with a listing of your skills directory to work out
 what's unused — that comparison is left to the caller.
 
-### `agent-conv fork <query> [--nth N] [--session UUID] [--match N] [--yes]`
+### `one-conv fork <query> [--nth N] [--session UUID] [--match N] [--yes]`
 
 **Claude Code only** — Codex has an analogous `codex exec resume` but no fork
 flag, and Cursor has no CLI at all. Continue a past thread as a **new**
@@ -377,11 +377,11 @@ the current process and hands the terminal off to a real, writable
 interactive `claude` session — run it from an actual terminal, not scripted).
 
 ```bash
-agent-conv fork myproject                     # dry-run: shows what would launch
-agent-conv fork myproject --session a1b2c3d4 --yes  # actually fork that thread
+one-conv fork myproject                     # dry-run: shows what would launch
+one-conv fork myproject --session a1b2c3d4 --yes  # actually fork that thread
 ```
 
-### `agent-conv send <query> <message> [--nth N] [--session UUID] [--match N] [--fork] [--permission-mode MODE] [--timeout SECS] [--yes] [--json]`
+### `one-conv send <query> <message> [--nth N] [--session UUID] [--match N] [--fork] [--permission-mode MODE] [--timeout SECS] [--yes] [--json]`
 
 **Claude Code only.** Send `<message>` into a thread non-interactively and
 print Claude's reply — runs `claude --print --resume <uuid> <message>` from
@@ -392,9 +392,9 @@ typed the message yourself; pass `--fork` to branch into a new thread instead
 reply captured immediately rather than opening a terminal).
 
 ```bash
-agent-conv send myproject "what's the status of #123?"           # dry-run
-agent-conv send myproject "what's the status of #123?" --yes     # actually sends, appends to that thread
-agent-conv send myproject "try a different approach" --fork --yes  # sends into a NEW branch instead
+one-conv send myproject "what's the status of #123?"           # dry-run
+one-conv send myproject "what's the status of #123?" --yes     # actually sends, appends to that thread
+one-conv send myproject "try a different approach" --fork --yes  # sends into a NEW branch instead
 ```
 
 This is a real write action: the resumed thread may run tools (edit files,
@@ -407,7 +407,7 @@ it in. Verified live: forking a small thread with `--permission-mode plan`
 and a tool-free prompt returns a reply in a few seconds, and the original
 thread's turn count is untouched (only a `--fork`'d branch grows).
 
-### `agent-conv port <query> --into claude|codex [--source S] [--session UUID | --nth N] [--match N] [--limit N] [--raw] [--include-subagents] [--print] [--permission-mode MODE] [--timeout SECS] [--no-mark-read] [--yes]`
+### `one-conv port <query> --into claude|codex [--source S] [--session UUID | --nth N] [--match N] [--limit N] [--raw] [--include-subagents] [--print] [--permission-mode MODE] [--timeout SECS] [--no-mark-read] [--yes]`
 
 Port a thread's content from **any** source into a **brand-new** conversation
 with another provider. This is *not* a true resume — each provider only
@@ -424,10 +424,10 @@ purely an editor launcher — open files, diff, goto-line; no chat/composer
 flags exist).
 
 ```bash
-agent-conv port myproject --source cursor --into claude          # interactive: cursor thread -> new claude session
-agent-conv port myproject --source codex --into claude --print   # headless: codex thread -> claude --print, capture reply
-agent-conv port myproject --source claude --into codex           # claude thread -> new interactive codex session
-agent-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
+one-conv port myproject --source cursor --into claude          # interactive: cursor thread -> new claude session
+one-conv port myproject --source codex --into claude --print   # headless: codex thread -> claude --print, capture reply
+one-conv port myproject --source claude --into codex           # claude thread -> new interactive codex session
+one-conv port myproject --into codex --session a1b2c3d4 --yes  # actually launch (any dry-run needs --yes)
 ```
 
 Defaults to a dry-run (same convention as `fork`/`send`) that prints the

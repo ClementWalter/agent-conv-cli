@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-loader = importlib.machinery.SourceFileLoader("agent_conv", str(Path(__file__).parent.parent / "bin" / "agent-conv"))
+loader = importlib.machinery.SourceFileLoader("agent_conv", str(Path(__file__).parent.parent / "bin" / "one-conv"))
 spec = importlib.util.spec_from_loader("agent_conv", loader)
 ac = importlib.util.module_from_spec(spec)
 sys.modules["agent_conv"] = ac
@@ -69,3 +69,8 @@ def test_append_writes_the_brain_session(tmp_path, monkeypatch):
     assert doc["source"] == "brain"
     assert doc["turns"][-1]["text"] == "salut"
     assert doc["turns"][-1]["mouth"] == "whatsapp"
+
+
+def test_canonical_corpus_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_CONV_CORPUS", str(tmp_path))
+    assert tmp_path in ac._corpus_roots()

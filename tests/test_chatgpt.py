@@ -11,7 +11,7 @@ from pathlib import Path
 import click.testing
 import pytest
 
-loader = importlib.machinery.SourceFileLoader("agent_conv", str(Path(__file__).parent.parent / "bin" / "agent-conv"))
+loader = importlib.machinery.SourceFileLoader("agent_conv", str(Path(__file__).parent.parent / "bin" / "one-conv"))
 spec = importlib.util.spec_from_loader("agent_conv", loader)
 ac = importlib.util.module_from_spec(spec)
 sys.modules["agent_conv"] = ac

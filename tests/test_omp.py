@@ -1,4 +1,4 @@
-"""Isolated OMP backend coverage for agent-conv.
+"""Isolated OMP backend coverage for one-conv.
 
 Each test runs the real CLI against a temp $OMP_HOME so it never
 touches the machine's live ~/.omp / ~/.claude / ~/.codex history.
@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-CLI = Path(__file__).resolve().parents[1] / "bin" / "agent-conv"
+CLI = Path(__file__).resolve().parents[1] / "bin" / "one-conv"
 
 SESSION_ID = "01a0test-0000-0000-0000-000000000001"
-CWD = "/tmp/agent-conv-omp-fixture"
+CWD = "/tmp/one-conv-omp-fixture"
 
 
 def _write_session(omp_home: Path) -> Path:
-    session_dir = omp_home / "agent" / "sessions" / "--tmp-agent-conv-omp-fixture"
+    session_dir = omp_home / "agent" / "sessions" / "--tmp-one-conv-omp-fixture"
     session_dir.mkdir(parents=True)
     path = session_dir / f"2026-08-24T12-00-00-000Z_{SESSION_ID}.jsonl"
     events = [
@@ -130,14 +130,14 @@ def test_chats_counts_one_thread(omp_env: dict[str, str]) -> None:
 
 def test_read_uses_the_stored_omp_title(omp_env: dict[str, str]) -> None:
     threads = json.loads(
-        _run(omp_env, "read", "agent-conv-omp-fixture", "--source", "omp", "--json").stdout
+        _run(omp_env, "read", "one-conv-omp-fixture", "--source", "omp", "--json").stdout
     )
     assert threads[0]["title"] == "Fix the widget"
 
 
 def test_read_exposes_the_session_uuid(omp_env: dict[str, str]) -> None:
     threads = json.loads(
-        _run(omp_env, "read", "agent-conv-omp-fixture", "--source", "omp", "--json").stdout
+        _run(omp_env, "read", "one-conv-omp-fixture", "--source", "omp", "--json").stdout
     )
     assert threads[0]["uuid"] == SESSION_ID
 
@@ -147,7 +147,7 @@ def test_thread_compact_shows_user_and_assistant_prose(omp_env: dict[str, str]) 
         _run(
             omp_env,
             "thread",
-            "agent-conv-omp-fixture",
+            "one-conv-omp-fixture",
             "--source",
             "omp",
             "--json",
@@ -165,7 +165,7 @@ def test_thread_raw_includes_thinking(omp_env: dict[str, str]) -> None:
         _run(
             omp_env,
             "thread",
-            "agent-conv-omp-fixture",
+            "one-conv-omp-fixture",
             "--source",
             "omp",
             "--json",
@@ -182,7 +182,7 @@ def test_thread_raw_includes_tool_call(omp_env: dict[str, str]) -> None:
         _run(
             omp_env,
             "thread",
-            "agent-conv-omp-fixture",
+            "one-conv-omp-fixture",
             "--source",
             "omp",
             "--json",
@@ -199,7 +199,7 @@ def test_token_total_excludes_cache_fields(omp_env: dict[str, str]) -> None:
         _run(
             omp_env,
             "read",
-            "agent-conv-omp-fixture",
+            "one-conv-omp-fixture",
             "--source",
             "omp",
             "--json",
@@ -226,7 +226,7 @@ def test_developer_compaction_preamble_is_not_a_turn(omp_env: dict[str, str]) ->
         _run(
             omp_env,
             "thread",
-            "agent-conv-omp-fixture",
+            "one-conv-omp-fixture",
             "--source",
             "omp",
             "--json",
