@@ -100,6 +100,7 @@ def install(root, browser_accounts, claude_accounts):
             group.add_command(_reader(root.commands[reader], (product,), f"one-conv cloud {name}"))
         group.add_command(_pull(sync, name, product))
         group.add_command(_accounts(name))
+        group.add_command(_connect(name))
         cloud.add_command(group)
     root.add_command(cloud)
 
@@ -168,4 +169,33 @@ def _accounts(name):
                          params=[click.Option(["--json", "as_json"], is_flag=True, help="Emit safe account metadata as JSON.")],
                          help="Discover browser accounts accessible without password prompts.",
                          epilog=f"\b\nExamples:\n  one-conv cloud {name} accounts --json",
+                         context_settings=HELP_SETTINGS)
+
+
+def _connect(name):
+    """Request one browser's Keychain authorization only during explicit setup."""
+    services = {"chrome": "Chrome Safe Storage", "arc": "Arc Safe Storage",
+                "brave": "Brave Safe Storage", "edge": "Microsoft Edge Safe Storage",
+                "chromium": "Chromium Safe Storage"}
+
+    @click.pass_context
+    def invoke(context, browser):
+        from .native_auth import read_secret
+        click.echo(f"Authorizing {browser} access. Choose Always Allow in the macOS dialog to reuse this authorization.", err=True)
+        try:
+            secret = read_secret(services[browser], authorize=True)
+        except (OSError, RuntimeError) as error:
+            raise click.ClickException(str(error)) from None
+        if secret is None:
+            raise click.ClickException("Browser credential access was not authorized.")
+        del secret
+        context.obj = {**context.obj, "browser_filter": browser}
+        context.invoke(_accounts(name), as_json=False)
+
+    return click.Command("connect", callback=invoke,
+                         params=[click.Option(["--browser"], type=click.Choice(tuple(services)),
+                                              default="chrome", show_default=True,
+                                              help="Authorize this browser only.")],
+                         help="Authorize a stable native helper once; normal pulls never prompt.",
+                         epilog=f"\b\nExamples:\n  one-conv cloud {name} connect --browser chrome",
                          context_settings=HELP_SETTINGS)

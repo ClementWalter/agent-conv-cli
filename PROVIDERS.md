@@ -84,6 +84,14 @@ The live CLI attempt found no session accessible without Keychain interaction;
 its HTTP ingestion is not yet live-verified. Missing access never becomes an
 empty successful sync. `cloud claude accounts --json` lists accessible selectors.
 
+`cloud PRODUCT connect --browser chrome` explicitly authorizes a stable native
+helper for one browser. Normal discovery uses its noninteractive read mode.
+The helper is installed once, optimized and ad hoc signed; ordinary CLI source
+updates do not replace its executable or Keychain trust identity. The local
+installation needs developer tools for its first build. A distributed release
+must use a stable signing identity across helper updates. No credentials are
+written into arguments, logs or files by this helper.
+
 The public hierarchy is `cloud chatgpt|claude|codex|cowork pull`. Internal source
 IDs (`claude-chat`, `codex-cloud`, `cowork-cloud`) remain unchanged in stored data.
 The old `cloud sync PRODUCT` and top-level commands remain compatibility aliases.

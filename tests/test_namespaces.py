@@ -12,7 +12,7 @@ import sys
 from click.testing import CliRunner
 import pytest
 
-from one_conv import cloud_cli, namespaces
+from one_conv import cloud_cli, namespaces, native_auth
 
 
 @pytest.fixture
@@ -151,3 +151,25 @@ def test_browser_discovery_keeps_provider_cookies_separate(app, monkeypatch, tmp
     monkeypatch.setattr(app, "_chatgpt_keychain_key", lambda service: b"synthetic-key")
     monkeypatch.setattr(app, "_chatgpt_decrypt_cookie", lambda encrypted, key: encrypted.decode())
     assert list(app._chatgpt_cookie_jars(domain, cookie))[0][1] == {cookie: value}
+
+
+def test_connect_authorizes_only_selected_browser(app, monkeypatch):
+    requests = []
+    monkeypatch.setattr(native_auth, "read_secret", lambda service, **kwargs: requests.append((service, kwargs)) or b"synthetic")
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter(()))
+    CliRunner().invoke(app.cli, ["cloud", "claude", "connect", "--browser", "chrome"])
+    assert requests == [("Chrome Safe Storage", {"authorize": True})]
+
+
+def test_connect_does_not_log_secret(app, monkeypatch):
+    monkeypatch.setattr(native_auth, "read_secret", lambda *args, **kwargs: b"synthetic-secret-marker")
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter(()))
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "connect"])
+    assert "synthetic-secret-marker" not in result.output
+
+
+def test_denied_connect_does_not_discover_accounts(app, monkeypatch):
+    monkeypatch.setattr(native_auth, "read_secret", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "_claude_accounts", lambda: pytest.fail("Denied connect cannot discover sessions"))
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "connect"])
+    assert "Browser credential access was not authorized" in result.output

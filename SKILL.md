@@ -34,11 +34,12 @@ asset sync, online ChatGPT search and existing automation, see
 
 ## Cloud history
 
-Every product exposes `accounts`, `pull`, `chats`, `read`, `thread`, `search`,
+Every product exposes `connect`, `accounts`, `pull`, `chats`, `read`, `thread`, `search`,
 `find` and `unread`. Pull contacts the provider. Readers and searches inspect
 saved history without contacting authentication services.
 
 ```bash
+one-conv cloud claude connect --browser chrome
 one-conv cloud claude accounts --json
 one-conv cloud claude pull --account Zama --limit 10
 one-conv cloud claude chats --json
@@ -58,7 +59,16 @@ Claude and OpenAI reuse provider-scoped browser sessions. Keychain access is
 strictly noninteractive: being signed into a browser does not prove the CLI
 can decrypt its session. Empty discovery or an authorization error is not an
 empty conversation history. Never disable prompt suppression to work around
-background authentication failures.
+background authentication failures. When the user explicitly authorizes setup,
+`connect --browser chrome` permits one Keychain dialog through a stable native
+helper. Ask the user to choose Always Allow; never run connect from a background
+check. This browser authorization is shared by Claude and OpenAI.
+
+The helper is compiled with optimization and installed once in the user's
+Application Support directory. Passive reads never rebuild it. This local
+development installation uses ad hoc signing; replacing the helper binary can
+require authorization again. Distributable app updates need a stable signing
+identity. Browser sessions themselves can still expire independently.
 
 `--session-file` remains an internal broker integration option. Do not ask users
 to copy tokens or treat that file as customer onboarding. No hosted login or

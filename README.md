@@ -6,6 +6,7 @@ Read your own conversation history through two command namespaces:
 - **`local`**: Claude Code, Codex CLI, Cursor, Oh My Pi, and the shared corpus on disk.
 
 ```bash
+one-conv cloud claude connect --browser chrome
 one-conv cloud claude accounts --json
 one-conv cloud claude pull --account Zama --limit 10
 one-conv cloud claude chats --json
@@ -18,7 +19,7 @@ one-conv local search QUERY
 one-conv local thread PROJECT --source claude
 ```
 
-Each cloud product has `accounts`, `pull`, `chats`, `read`, `thread`, `search`,
+Each cloud product has `connect`, `accounts`, `pull`, `chats`, `read`, `thread`, `search`,
 `find`, and `unread`. Readers use saved history; only `pull` and account discovery
 contact providers. `local` never discovers cloud accounts. Product names remove
 the ambiguity between `cloud claude` and local Claude Code, or `cloud codex` and
@@ -27,7 +28,13 @@ local Codex CLI.
 Claude uses the same browser-session strategy as OpenAI, with organization name
 or ID selection. Session discovery never prompts for Keychain passwords; a
 protected browser key can therefore make a signed-in account unavailable to the
-CLI. Cowork's transcript endpoint remains unverified and its pull fails explicitly.
+CLI. Explicit `connect --browser chrome` installs a stable native helper and
+allows setup authorization for that browser only. Choose Always Allow in macOS;
+both Claude and OpenAI then reuse that helper silently. Ordinary CLI updates
+leave the helper executable untouched. This local build uses ad hoc signing;
+replacing the helper can require renewed authorization. The initial local build
+requires macOS developer tools; passive pulls never compile or prompt.
+Cowork's transcript endpoint remains unverified and its pull fails explicitly.
 See [PROVIDERS.md](PROVIDERS.md) for coverage and live verification limits.
 
 ## Compatibility reference

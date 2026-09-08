@@ -1180,6 +1180,9 @@ def _silent_keychain_secret(service: str) -> bytes | None:
     """Background history discovery must never present a system password dialog."""
     if sys.platform != "darwin":
         return None
+    from one_conv.native_auth import helper_path, read_secret
+    if helper_path().exists():
+        return read_secret(service)
     import ctypes as c
     try:
         cf = c.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
@@ -1241,6 +1244,10 @@ def _chatgpt_cookie_jars(domain="chatgpt.com", required_cookie="__Secure-next-au
         raise ValueError("Unsupported conversation provider domain")
     keys: dict[str, bytes | None] = {}
     for label, pattern, service in CHATGPT_COOKIE_SOURCES:
+        context = click.get_current_context(silent=True)
+        browser_filter = (context.obj or {}).get("browser_filter") if context else None
+        if browser_filter and label != browser_filter:
+            continue
         for store in sorted(glob.glob(str(Path(pattern).expanduser()))):
             if service not in keys:
                 keys[service] = _chatgpt_keychain_key(service)
