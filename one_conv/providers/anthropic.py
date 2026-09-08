@@ -1,15 +1,13 @@
 """Read Claude Chat through an explicitly supplied private web session.
 
-Route evidence: github.com/glebmish/claude-exporter/blob/main/docs/claude-ai-api.md
-and gist.github.com/jas-ho/f95abd89d4e007eac9ee821d7c2a3d0b.
-These are public implementations, not a supported Anthropic API contract.
+The authenticated web interface uses an offset-paged conversation listing and
+message trees. These private routes are not a supported Anthropic API contract.
 Cowork cloud is deliberately excluded until its own session routes are verified.
 """
 
 from __future__ import annotations
 
 from urllib.parse import quote
-import hashlib
 import json
 
 from .base import (
@@ -25,6 +23,7 @@ from .base import (
 
 FINGERPRINT = "claude-web-chat-2026-09-08"
 CAPABILITIES = ("claude_chat:list", "claude_chat:read")
+ROOT_MESSAGE_ID = "00000000-0000-4000-8000-000000000000"
 
 
 def _text(value, field: str, *, empty: bool = False) -> str:
@@ -71,23 +70,22 @@ class AnthropicProvider:
     def list_conversations(self, cursor=None, limit=50) -> ConversationPage:
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        # The evidenced route returns an array; inventing pagination can lose history.
-        records = self.transport.get(self._root)
-        if not isinstance(records, list):
-            raise SchemaChanged("Claude conversation listing must be an array")
-        fingerprint = hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()
         offset = 0
         if cursor is not None:
-            if not isinstance(cursor, str):
+            if not isinstance(cursor, str) or not cursor.isascii() or not cursor.isdigit():
                 raise ValueError("Invalid Claude listing cursor")
-            parts = cursor.split(":")
-            if len(parts) != 2 or not parts[1].isdigit():
+            offset = int(cursor)
+            if offset > 2**31 - 1:
                 raise ValueError("Invalid Claude listing cursor")
-            if parts[0] != fingerprint:
-                raise SchemaChanged("Claude listing changed; restart discovery")
-            offset = int(parts[1])
-            if offset > len(records):
-                raise ValueError("Invalid Claude listing cursor")
+        payload = _object(self.transport.get(
+            f"{self._root}_v2",
+            params={"limit": limit, "offset": offset, "consistency": "eventual"},
+        ))
+        records = payload.get("data")
+        if not isinstance(records, list) or type(payload.get("has_more")) is not bool:
+            raise SchemaChanged("Claude listing requires data and a boolean has_more")
+        if payload["has_more"] and not records:
+            raise SchemaChanged("Claude listing cannot advance an empty page")
         summaries = []
         for raw in records:
             item = _object(raw)
@@ -98,16 +96,16 @@ class AnthropicProvider:
                 updated_at=_optional_text(item.get("updated_at"), "updated_at"),
                 source_url=f"https://claude.ai/chat/{quote(identifier, safe='')}",
             ))
-        # Pagination is local and snapshot-bound because upstream paging is unverified.
-        end = offset + limit
-        next_cursor = f"{fingerprint}:{end}" if end < len(summaries) else None
-        return ConversationPage(items=tuple(summaries[offset:end]), next_cursor=next_cursor)
+        # Advance by actual returned records so short pages cannot skip history.
+        next_cursor = str(offset + len(records)) if payload["has_more"] else None
+        return ConversationPage(items=tuple(summaries), next_cursor=next_cursor)
 
     def read_conversation(self, conversation_id: str) -> Conversation:
         identifier = _text(conversation_id, "conversation ID")
         payload = _object(self.transport.get(
             f"{self._root}/{quote(identifier, safe='')}",
-            params={"tree": "true", "rendering_mode": "messages", "render_all_tools": "true"},
+            params={"tree": "True", "rendering_mode": "messages", "render_all_tools": "true",
+                    "include_inline_comparison": "true", "consistency": "strong"},
         ))
         if payload.get("uuid") != identifier:
             raise SchemaChanged("Claude returned a different conversation")
@@ -161,11 +159,13 @@ class AnthropicProvider:
                     text.append(f"[Attachment: {name}]")
                     if asset.get("extracted_content") is not None:
                         text.append(_text(asset["extracted_content"], "extracted attachment content", empty=True))
+            parent = _optional_text(item.get("parent_message_uuid"), "parent ID")
             messages.append(Message(
                 id=message_id,
                 role="user" if sender == "human" else "assistant",
                 text="\n".join(text),
-                parent_id=_optional_text(item.get("parent_message_uuid"), "parent ID"),
+                # Claude's synthetic root is not a missing transcript message.
+                parent_id=None if parent == ROOT_MESSAGE_ID else parent,
                 timestamp=_optional_text(item.get("created_at"), "created_at"),
                 content_blocks=tuple(blocks),
             ))

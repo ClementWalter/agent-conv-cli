@@ -80,14 +80,14 @@ def test_chatgpt_preserves_message_branches():
     message = {"author": {"role": "assistant"}, "content": {"parts": ["answer"]}}
     payload = {"mapping": {"a": {"message": None}, "b": {"parent": "a", "message": message},
                            "c": {"parent": "a", "message": message}}, "current_node": "c"}
-    result = ChatGPTProvider(StubSession([200], payload)).read_conversation("conversation")
+    result = ChatGPTProvider(StubSession([200], payload)).read_legacy_conversation("conversation")
     assert tuple((item.id, item.parent_id) for item in result.messages) == (("a", None), ("b", "a"), ("c", "a"))
 
 
 def test_chatgpt_structural_leaf_keeps_parent_link():
     payload = {"mapping": {"root": {"message": {"author": {"role": "user"}, "content": {"parts": ["hello"]}}},
                            "leaf": {"parent": "root", "message": None}}, "current_node": "leaf"}
-    result = ChatGPTProvider(StubSession([200], payload)).read_conversation("conversation")
+    result = ChatGPTProvider(StubSession([200], payload)).read_legacy_conversation("conversation")
     assert result.messages[1].parent_id == "root"
 
 
@@ -162,11 +162,119 @@ def test_nonfinite_retry_after_uses_bounded_fallback(delay):
 @pytest.mark.parametrize("payload", [None, [], {"mapping": []}, {"mapping": {}, "current_node": "missing"}])
 def test_chatgpt_invalid_graph_fails(payload):
     with pytest.raises(SchemaChanged):
-        ChatGPTProvider(StubSession([200], payload)).read_conversation("conversation")
+        ChatGPTProvider(StubSession([200], payload)).read_legacy_conversation("conversation")
 
 
 def test_chatgpt_rich_content_is_retained():
     content = {"content_type": "multimodal_text", "parts": [{"asset_pointer": "asset"}]}
     payload = {"mapping": {"node": {"message": {"author": {"role": "user"}, "content": content}}}}
-    result = ChatGPTProvider(StubSession([200], payload)).read_conversation("conversation")
+    result = ChatGPTProvider(StubSession([200], payload)).read_legacy_conversation("conversation")
     assert result.messages[0].content_blocks == (content,)
+
+
+def message_page(identity, previous=False, following=False):
+    return {"conversation_id": "conversation", "title": "Fixture", "messages": [
+        {"id": identity, "author": {"role": "user"}, "content": {"parts": [identity]}}],
+        "page_info": {"start_cursor": identity, "end_cursor": identity,
+                      "has_previous_page": previous, "has_next_page": following}}
+
+
+class PageTransport:
+    def __init__(self, pages):
+        self.pages = iter(pages)
+        self.calls = []
+
+    def get(self, path, params=None):
+        self.calls.append((path, params))
+        return next(self.pages)
+
+
+def test_current_branch_pages_are_chronological():
+    transport = PageTransport([message_page("new", True), message_page("old", following=True)])
+    result = ChatGPTProvider(None, transport).read_conversation("conversation")
+    assert tuple(row.id for row in result.messages) == ("old", "new")
+
+
+def test_current_branch_uses_observed_before_parameter():
+    transport = PageTransport([message_page("new", True), message_page("old", following=True)])
+    ChatGPTProvider(None, transport).read_conversation("conversation")
+    assert transport.calls[1] == ("/backend-api/conversations/conversation/messages",
+                                  {"before": "new", "include_has_versions": "true", "num_turns": 10})
+
+
+def test_current_branch_page_bound_reports_incomplete():
+    result = ChatGPTProvider(None, PageTransport([message_page("new", True)])).read_conversation("conversation", max_pages=1)
+    assert result.complete is False
+
+
+def test_current_branch_coverage_is_explicit():
+    result = ChatGPTProvider(None, PageTransport([message_page("new")])).read_conversation("conversation")
+    assert result.coverage == "current_branch"
+
+
+def test_current_branch_does_not_invent_parent_edges():
+    result = ChatGPTProvider(None, PageTransport([message_page("new")])).read_conversation("conversation")
+    assert result.messages[0].parent_id is None
+
+
+def test_current_branch_duplicate_pages_fail():
+    with pytest.raises(SchemaChanged):
+        ChatGPTProvider(None, PageTransport([message_page("new", True), message_page("new")])).read_conversation("conversation")
+
+
+class SearchTransport:
+    def __init__(self, response):
+        self.response = response
+        self.body = None
+
+    def post_search(self, path, body):
+        self.body = body
+        return self.response
+
+
+@pytest.fixture
+def global_search_payload():
+    return {"items": [{"source_type": "conversation", "snippet": "match",
+                       "payload": {"conversation_id": "conversation"}},
+                      {"source_type": "project"}], "cursor": "more", "partial_results": False,
+            "source_statuses": []}
+
+
+def test_global_search_filters_nonconversation_sources(global_search_payload):
+    result = ChatGPTProvider(None, SearchTransport(global_search_payload)).global_search("query")
+    assert [item["conversation_id"] for item in result["items"]] == ["conversation"]
+
+
+def test_global_search_reports_unfetched_pages(global_search_payload):
+    result = ChatGPTProvider(None, SearchTransport(global_search_payload)).global_search("query")
+    assert result["complete"] is False
+
+
+def test_global_search_request_has_observed_source_filters(global_search_payload):
+    transport = SearchTransport(global_search_payload)
+    ChatGPTProvider(None, transport).global_search("query")
+    assert transport.body["source_requests"] == [{"type": "conversation"}, {"type": "project"},
+        {"type": "library", "filters": {"lanes": ["image", "document", "folder"], "providers": ["native"]}}]
+
+
+@pytest.mark.parametrize("origin,path", [("https://claude.ai", "/backend-api/global/search"),
+                                         ("https://chatgpt.com", "/backend-api/conversation")])
+def test_transport_refuses_other_posts(origin, path):
+    with pytest.raises(ValueError):
+        JsonTransport(None, origin, "fixture").post_search(path, {})
+
+
+def test_readonly_search_post_retries_same_query_body():
+    class Session:
+        def __init__(self):
+            self.requests = []
+
+        def post(self, url, **kwargs):
+            self.requests.append(kwargs)
+            return SimpleNamespace(status_code=429 if len(self.requests) == 1 else 200,
+                                   headers={}, json=lambda: {})
+
+    session = Session()
+    JsonTransport(session, "https://chatgpt.com", "fixture", sleep=lambda _: None).post_search(
+        "/backend-api/global/search", {"query_id": "fixed", "query": "query"})
+    assert [call["json"] for call in session.requests] == [{"query_id": "fixed", "query": "query"}] * 2

@@ -355,5 +355,6 @@ Same idea — your own messages, from the terminal, for other channels
 `one-conv cloud providers` reports adapter coverage for ChatGPT, Claude Chat,
 Codex cloud and Cowork cloud. See [provider architecture and limits](PROVIDERS.md)
 for session-based sync, API-change handling and current verification status.
-Claude Chat and Codex current-task adapters are fixture-tested; Cowork cloud
-remains unsupported. A hosted user login flow is not implemented yet.
+ChatGPT, Claude Chat and Codex task-graph parsers are checked against actual
+signed-in browser responses; Cowork cloud still needs a populated sample.
+A hosted user login flow is not implemented yet.

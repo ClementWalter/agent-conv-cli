@@ -15,15 +15,44 @@ The experimental cloud path separates three responsibilities:
 
 | Product | Adapter | Current coverage | Live verification in this change |
 | --- | --- | --- | --- |
-| ChatGPT | `chatgpt.py` | Account validation, active/archive listing, search, conversation graph | Not performed |
-| Claude Chat | `anthropic.py` | Explicit organization, conversation listing and message tree | Not performed |
-| Codex cloud | `codex.py` | Current tasks and current user/assistant turns, including worklog fallback | Not performed |
-| Cowork cloud | None | No demonstrated consumer cloud list/read routes | Blocked by unavailable authenticated browser |
+| ChatGPT | `chatgpt.py` | Paginated current conversation branch; separate legacy graph reader | Browser listing and two transcript responses verified; older-message pagination observed |
+| Claude Chat | `anthropic.py` | Explicit organization, v2 conversation listing and message tree | Four conversations listed; two real transcripts parsed |
+| Codex cloud | `codex.py` | Current tasks and full returned turn graphs | Three tasks listed; two task graphs parsed |
+| Cowork cloud | None | No populated sample to establish transcript schema | Connected account's Cowork filter returned no activity |
 
-Codex coverage is a current-task snapshot, not full historical turns. Claude
-Code and Cowork are not inferred from Claude Chat access. Provider capabilities
-remain distinct from account login. `one-conv cloud providers` reports these
-limits; `one-conv cloud sync cowork-cloud` explicitly fails without a request.
+Codex reads the returned turn graph, including its active branch, for current
+tasks. Archived discovery is not implemented; the browser's archived listing
+was empty. Claude Code and Cowork are not inferred from Claude Chat access.
+Provider capabilities remain distinct from account login. `one-conv cloud
+providers` reports these limits; Cowork sync explicitly fails without a request.
+
+Live evidence was collected on 2026-09-08 from authenticated Chrome interface
+requests through the supported browser connection. Response bodies were fed
+through the real adapters; only synthetic regression fixtures enter Git.
+This verifies network routes, actual response shapes and normalization. It does
+not verify the separate Python cookie-to-bearer exchange, hosted login, session
+renewal or operation with the user's browser closed. No credentials were copied.
+
+The current ChatGPT UI uses `/backend-api/conversations/{id}` and earlier-page
+`/messages?before=...` requests. This exposes the selected branch, not every
+regenerated alternative. `coverage` and `complete` are persisted explicitly.
+A seven-message conversation was complete; three captured pages of a longer
+conversation totaled 115 messages and still indicated older history. Bounded
+reads report partial, and never overwrite an existing complete cached snapshot.
+The legacy singular graph endpoint remains a separate compatibility path and
+was not live-verified in this browser pass.
+
+The observed search UI uses a read-only POST to `/backend-api/global/search`.
+`global_search` matches that request and normalizes conversation hits while
+retaining source-status and partial-result metadata. The first captured page
+contained ten hits and a continuation cursor; only that first-page contract is
+verified here. This POST is narrowly allowlisted in the transport. Legacy CLI
+search keeps its separate GET compatibility route, not live-verified this pass.
+
+Claude's observed listing is `chat_conversations_v2` with `data` and `has_more`,
+not the earlier array response. The adapter normalizes its synthetic root UUID
+before the core traverses the active branch. Codex's observed `/tasks/{id}/turns`
+contains `turn_mapping` and `current_turn_id`; details alone omit historical turns.
 
 ## Session integration
 
@@ -83,5 +112,5 @@ contract. They can migrate independently without changing the normalized API.
   not an official contract: [exporter route notes](https://github.com/glebmish/claude-exporter/blob/main/docs/claude-ai-api.md)
   and [export implementation](https://gist.github.com/jas-ho/f95abd89d4e007eac9ee821d7c2a3d0b).
 - Cowork investigation found generic managed-agent sessions and local desktop
-  bridge code but no verified consumer cloud history route. An authenticated
-  list/detail observation remains necessary; no route is fabricated here.
+  bridge code but no verified populated consumer cloud history response. An
+  authenticated list/detail observation remains necessary; no route is fabricated.

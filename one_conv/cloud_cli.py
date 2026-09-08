@@ -71,10 +71,10 @@ def cloud_group():
 def providers():
     """Show implemented coverage, distinct from live account verification."""
     click.echo(json.dumps([
-        {"product": "chatgpt", "adapter": "experimental", "coverage": "chat conversations", "live_verified_this_change": False},
-        {"product": "claude-chat", "adapter": "experimental", "coverage": "organization chat conversations", "live_verified_this_change": False},
-        {"product": "codex-cloud", "adapter": "experimental", "coverage": "current cloud task turns only", "live_verified_this_change": False},
-        {"product": "cowork-cloud", "adapter": "unsupported", "coverage": "unverified routes", "live_verified_this_change": False},
+        {"product": "chatgpt", "adapter": "experimental", "coverage": "paginated current conversation branch", "verification": "browser responses verified 2026-09-08", "hosted_login_verified": False},
+        {"product": "claude-chat", "adapter": "experimental", "coverage": "organization chat conversation trees", "verification": "browser responses verified 2026-09-08", "hosted_login_verified": False},
+        {"product": "codex-cloud", "adapter": "experimental", "coverage": "current tasks with turn graphs", "verification": "browser responses verified 2026-09-08", "hosted_login_verified": False},
+        {"product": "cowork-cloud", "adapter": "unsupported", "coverage": "no sample cloud task in connected account", "verification": "empty Cowork history observed 2026-09-08", "hosted_login_verified": False},
     ]))
 
 

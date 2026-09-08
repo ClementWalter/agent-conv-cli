@@ -77,7 +77,8 @@ def test_read_requests_full_tree(transcript):
     transport = StubTransport(transcript)
     AnthropicProvider(None, "org", transport=transport).read_conversation("chat-1")
     assert transport.calls == [("/api/organizations/org/chat_conversations/chat-1",
-                               {"tree": "true", "rendering_mode": "messages", "render_all_tools": "true"})]
+                               {"tree": "True", "rendering_mode": "messages", "render_all_tools": "true",
+                                "include_inline_comparison": "true", "consistency": "strong"})]
 
 
 @pytest.mark.parametrize("field,value", [("uuid", "another"), ("chat_messages", {}),
@@ -121,33 +122,47 @@ def test_cowork_capability_is_not_claimed():
 
 
 @pytest.mark.parametrize("payload", [{"error": "challenge"}, None, "html"])
-def test_rejects_non_array_listing(payload):
+def test_rejects_invalid_listing_envelope(payload):
     provider = AnthropicProvider(None, "org", transport=StubTransport(payload))
     with pytest.raises(SchemaChanged):
         provider.list_conversations()
 
 
-def test_paginates_snapshot_without_omission():
-    provider = AnthropicProvider(None, "org", transport=StubTransport([
-        {"uuid": "one", "name": "First"}, {"uuid": "two", "name": "Second"},
-    ]))
-    first = provider.list_conversations(limit=1)
-    assert provider.list_conversations(first.next_cursor, limit=1).items[0].id == "two"
+def test_paginates_using_actual_page_length():
+    provider = AnthropicProvider(None, "org", transport=StubTransport({
+        "data": [{"uuid": "one", "name": "First"}], "has_more": True,
+    }))
+    assert provider.list_conversations(cursor="30", limit=30).next_cursor == "31"
 
 
-def test_rejects_changed_listing_cursor():
-    transport = StubTransport([{"uuid": "one", "name": "First"}, {"uuid": "two", "name": "Second"}])
-    provider = AnthropicProvider(None, "org", transport=transport)
-    first = provider.list_conversations(limit=1)
-    transport.payload.append({"uuid": "three", "name": "Third"})
+def test_rejects_nonadvancing_page():
+    provider = AnthropicProvider(None, "org", transport=StubTransport({"data": [], "has_more": True}))
     with pytest.raises(SchemaChanged):
-        provider.list_conversations(first.next_cursor)
+        provider.list_conversations()
+
+
+@pytest.mark.parametrize("cursor", ["-1", "1.0", "secret", 30, "١", "2147483648"])
+def test_rejects_invalid_cursor(cursor):
+    provider = AnthropicProvider(None, "org", transport=StubTransport({"data": [], "has_more": False}))
+    with pytest.raises(ValueError):
+        provider.list_conversations(cursor=cursor)
+
+
+def test_last_page_has_no_cursor():
+    provider = AnthropicProvider(None, "org", transport=StubTransport({"data": [], "has_more": False}))
+    assert provider.list_conversations().next_cursor is None
+
+
+def test_normalizes_synthetic_root(transcript):
+    transcript["chat_messages"][0]["parent_message_uuid"] = "00000000-0000-4000-8000-000000000000"
+    provider = AnthropicProvider(None, "org", transport=StubTransport(transcript))
+    assert provider.read_conversation("chat-1").messages[0].parent_id is None
 
 
 def test_organization_path_is_encoded():
-    transport = StubTransport([])
+    transport = StubTransport({"data": [], "has_more": False})
     AnthropicProvider(None, "../org", transport=transport).list_conversations()
-    assert transport.calls[0][0] == "/api/organizations/..%2Forg/chat_conversations"
+    assert transport.calls[0][0] == "/api/organizations/..%2Forg/chat_conversations_v2"
 
 
 def test_session_transport_to_normalized_conversation(transcript):

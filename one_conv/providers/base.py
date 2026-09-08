@@ -63,6 +63,8 @@ class Conversation:
     title: str
     messages: tuple[Message, ...]
     active_leaf_id: str | None = None
+    coverage: str = "provider_history"
+    complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -118,12 +120,21 @@ class JsonTransport:
         self.sleep = sleep
 
     def get(self, path, params=None):
+        return self._request("get", path, {"params": params})
+
+    def post_search(self, path, body):
+        """Permit only the evidenced read-only search POST, never provider mutations."""
+        if self.base_url != "https://chatgpt.com" or path != "/backend-api/global/search":
+            raise ValueError("Only the ChatGPT read-only search POST is supported")
+        return self._request("post", path, {"json": body})
+
+    def _request(self, method, path, arguments):
         if not path.startswith("/") or path.startswith("//") or "\\" in path:
             raise ValueError("Provider requests require an absolute local path")
         for attempt in range(self.max_attempts):
             try:
-                response = self.session.get(self.base_url + path, params=params,
-                                            timeout=self.timeout, allow_redirects=False)
+                response = getattr(self.session, method)(self.base_url + path, **arguments,
+                                                        timeout=self.timeout, allow_redirects=False)
             except Exception:
                 # Session libraries differ; never expose exception strings containing credentials.
                 if attempt + 1 == self.max_attempts:

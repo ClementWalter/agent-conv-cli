@@ -67,6 +67,7 @@ def synchronize(provider, product: str, *, root: Path | None = None, limit: int 
     account = provider.validate_connection()
     directory = (root or cache_root()) / _key(product, account.id)
     report = {"product": product, "account_id": account.id, "fetched": 0,
+              "incomplete_conversations": 0, "retained_complete_snapshots": 0,
               "state": "syncing", "capabilities": account.capabilities,
               "observed_at": datetime.now(timezone.utc).isoformat()}
     cursor = None
@@ -88,6 +89,8 @@ def synchronize(provider, product: str, *, root: Path | None = None, limit: int 
                 if conversation.id != item.id:
                     raise SchemaChanged("Conversation identity differs from requested identity")
                 document = asdict(conversation)
+                if not conversation.complete:
+                    report["incomplete_conversations"] += 1
                 document.update({"source": product, "machine": "cloud",
                                  "account_id": account.id,
                                  "session": _key(product, account.id, conversation.id),
@@ -100,12 +103,23 @@ def synchronize(provider, product: str, *, root: Path | None = None, limit: int 
                                             "parent_id": row.parent_id,
                                             "content_blocks": row.content_blocks}
                                            for row in _active_messages(conversation)]})
-                _write(directory / f"{document['session']}.json", document)
+                destination = directory / f"{document['session']}.json"
+                retain = False
+                if not conversation.complete and destination.exists():
+                    try:
+                        retain = json.loads(destination.read_text()).get("complete", True)
+                    except (OSError, ValueError, AttributeError):
+                        retain = False
+                # A bounded refresh must not replace an already complete history window.
+                if retain:
+                    report["retained_complete_snapshots"] += 1
+                else:
+                    _write(destination, document)
                 report["fetched"] += 1
                 if report["fetched"] >= limit:
                     break
             if page.next_cursor is None:
-                report["state"] = "partial" if truncated else "ready"
+                report["state"] = "partial" if truncated or report["incomplete_conversations"] else "ready"
                 break
             if page.next_cursor in cursors:
                 raise SchemaChanged("Provider pagination did not advance")

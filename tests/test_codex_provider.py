@@ -2,7 +2,7 @@
 
 import pytest
 
-from one_conv.providers.base import ProviderUnavailable, SchemaChanged
+from one_conv.providers.base import SchemaChanged
 from one_conv.providers.codex import CAPABILITIES, CodexProvider
 
 
@@ -68,13 +68,13 @@ def test_validation_discloses_partial_coverage():
 @pytest.mark.parametrize("index,expected", [(0, "First line\n\nSecond line"), (1, "Assistant response")])
 def test_reads_current_turn_text(task, index, expected):
     provider = CodexProvider(SessionStub(task), "account")
-    assert provider.read_conversation("task_123").messages[index].text == expected
+    assert provider.read_current_turn("task_123").messages[index].text == expected
 
 
 def test_preserves_provider_message_id(task):
     task["current_user_turn"]["input_items"][0]["id"] = "message-id"
     provider = CodexProvider(SessionStub(task), "account")
-    assert provider.read_conversation("task_123").messages[0].id == "message-id"
+    assert provider.read_current_turn("task_123").messages[0].id == "message-id"
 
 
 def test_reads_worklog_fallback(task):
@@ -82,13 +82,13 @@ def test_reads_worklog_fallback(task):
         "author": {"role": "assistant"}, "content": {"parts": ["Worklog answer"]},
     }]}}
     provider = CodexProvider(SessionStub(task), "account")
-    assert provider.read_conversation("task_123").messages[-1].text == "Worklog answer"
+    assert provider.read_current_turn("task_123").messages[-1].text == "Worklog answer"
 
 
 def test_encodes_task_identifier(task):
     task["task"]["id"] = "task/a?b"
     session = SessionStub(task)
-    CodexProvider(session, "account").read_conversation("task/a?b")
+    CodexProvider(session, "account").read_current_turn("task/a?b")
     assert session.requests[0][0].endswith("/tasks/task%2Fa%3Fb")
 
 
@@ -100,21 +100,113 @@ def test_rejects_unknown_list_shape(payload):
 
 def test_rejects_wrong_task_identity(task):
     with pytest.raises(SchemaChanged, match="identity mismatch"):
-        CodexProvider(SessionStub(task), "account").read_conversation("other")
+        CodexProvider(SessionStub(task), "account").read_current_turn("other")
 
 
 def test_missing_turn_fields_is_not_empty_history():
     payload = {"task": {"id": "task_123", "title": "Task"}}
     with pytest.raises(SchemaChanged, match="turns missing"):
-        CodexProvider(SessionStub(payload), "account").read_conversation("task_123")
+        CodexProvider(SessionStub(payload), "account").read_current_turn("task_123")
 
 
-def test_full_history_is_explicitly_unavailable():
-    with pytest.raises(ProviderUnavailable, match="full task history"):
-        CodexProvider(SessionStub({}), "account").read_full_history("task_123")
+def test_current_turn_is_explicitly_incomplete(task):
+    assert CodexProvider(SessionStub(task), "account").read_current_turn("task_123").complete is False
 
 
 @pytest.mark.parametrize("limit", [0, 101, True, "10"])
 def test_rejects_invalid_page_limit(limit):
     with pytest.raises(ValueError):
         CodexProvider(SessionStub({}), "account").list_conversations(limit=limit)
+
+
+class GraphSessionStub(SessionStub):
+    """Serve task metadata and the separately fetched turn graph."""
+
+    def __init__(self, task, graph):
+        super().__init__(task)
+        self.graph = graph
+
+    def get(self, url, **kwargs):
+        self.requests.append((url, kwargs))
+        return ResponseStub(self.graph if url.endswith("/turns") else self.payload)
+
+
+@pytest.fixture
+def graph():
+    return {"current_turn_id": "answer", "turn_mapping": {
+        "question": {"id": "question", "parent": None, "children": ["answer", "abandoned"],
+                     "turn": {"id": "question", "role": "user", "input_items": [{
+                         "type": "message", "content": [{"content_type": "text", "text": "Question"}],
+                     }]}},
+        "answer": {"id": "answer", "parent": "question", "children": [],
+                   "turn": {"id": "answer", "role": "assistant", "output_items": [{
+                       "type": "message", "content": [{"content_type": "text", "text": "Accepted"}],
+                   }]}},
+        "abandoned": {"id": "abandoned", "parent": "question", "children": [],
+                      "turn": {"id": "abandoned", "role": "assistant", "output_items": [{
+                          "type": "message", "content": [{"content_type": "text", "text": "Discarded"}],
+                      }]}},
+    }}
+
+
+def test_graph_fetches_observed_turns_route(task, graph):
+    session = GraphSessionStub(task, graph)
+    CodexProvider(session, "account").read_conversation("task_123")
+    assert session.requests[-1][0] == "https://chatgpt.com/backend-api/wham/tasks/task_123/turns"
+
+
+def test_graph_retains_alternate_branch(task, graph):
+    result = CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+    assert [message.id for message in result.messages] == ["question", "answer", "abandoned"]
+
+
+def test_graph_identifies_active_branch(task, graph):
+    result = CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+    assert result.active_leaf_id == "answer"
+
+
+def test_graph_preserves_parent(task, graph):
+    result = CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+    assert result.messages[1].parent_id == "question"
+
+
+def test_graph_declares_actual_coverage(task, graph):
+    result = CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+    assert result.coverage == "task_turn_graph"
+
+
+def test_graph_missing_active_turn_fails(task, graph):
+    graph["current_turn_id"] = "unknown"
+    with pytest.raises(SchemaChanged, match="current turn missing"):
+        CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+
+
+def test_graph_missing_current_field_is_not_empty_history(task):
+    with pytest.raises(SchemaChanged, match="current turn field missing"):
+        CodexProvider(GraphSessionStub(task, {"turn_mapping": {}}), "account").read_conversation("task_123")
+
+
+def test_graph_missing_parent_fails(task, graph):
+    graph["turn_mapping"]["answer"]["parent"] = "unknown"
+    with pytest.raises(SchemaChanged, match="parent missing"):
+        CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+
+
+def test_graph_cycle_fails(task, graph):
+    graph["turn_mapping"]["question"]["parent"] = "answer"
+    with pytest.raises(SchemaChanged, match="cycle"):
+        CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+
+
+def test_graph_identity_mismatch_fails(task, graph):
+    graph["turn_mapping"]["question"]["turn"]["id"] = "other"
+    with pytest.raises(SchemaChanged, match="identity mismatch"):
+        CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+
+
+def test_graph_worklog_only_answer(task, graph):
+    graph["turn_mapping"]["answer"]["turn"] = {"id": "answer", "role": "assistant", "worklog": {
+        "messages": [{"author": {"role": "assistant"}, "content": {"parts": ["Worklog"]}}],
+    }}
+    result = CodexProvider(GraphSessionStub(task, graph), "account").read_conversation("task_123")
+    assert result.messages[1].text == "Worklog"

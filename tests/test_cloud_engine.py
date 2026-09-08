@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from dataclasses import replace
 
 from click.testing import CliRunner
 import pytest
@@ -60,6 +61,20 @@ def cached_document(tmp_path, conversation):
 
 def test_persists_provider_source(cached_document):
     assert cached_document["source"] == "claude-chat"
+
+
+def test_incomplete_message_window_is_not_ready(tmp_path, conversation):
+    partial = replace(conversation, complete=False, coverage="current_branch")
+    assert synchronize(ProviderStub(partial), "chatgpt", root=tmp_path)["state"] == "partial"
+
+
+def test_partial_refresh_retains_complete_snapshot(tmp_path, conversation):
+    provider = ProviderStub(conversation)
+    synchronize(provider, "chatgpt", root=tmp_path)
+    provider.conversation = replace(conversation, complete=False, title="Partial")
+    synchronize(provider, "chatgpt", root=tmp_path)
+    path = next(p for p in tmp_path.glob("*/*.json") if p.name != ".status.json")
+    assert json.loads(path.read_text())["title"] == "Architecture"
 
 
 def test_persists_provider_account(cached_document):

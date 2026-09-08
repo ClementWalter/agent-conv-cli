@@ -40,8 +40,8 @@ description:
 
 Experimental cloud adapters are available through `one-conv cloud providers`
 and `one-conv cloud sync --help`. Read [PROVIDERS.md](PROVIDERS.md) before using
-them: Claude Chat and Codex current-task coverage is fixture-tested, Cowork is
-unsupported, and cloud login is not implemented. Managed sessions come from
+them: Claude Chat and Codex task graphs are verified against browser responses,
+Cowork needs a populated sample, and cloud login is not implemented. Sessions come from
 the caller; never present manual token copying as customer onboarding.
 
 Terminal access to your **own** conversation history across four coding

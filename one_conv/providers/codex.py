@@ -1,9 +1,10 @@
-"""Read Codex cloud current-task snapshots through an injected account session.
+"""Read Codex cloud task turn graphs through an injected account session.
 
 Routes and current-turn fields follow openai/codex at revision
 74d3a5bf1046f004ee33a200ee497dc7593a5687, backend-client/src/client.rs
 and backend-client/tests/fixtures/task_details_with_diff.json.
-These snapshots do not constitute complete historical conversations.
+The task turns route and embedded graph were observed in the signed-in web UI.
+Discovery covers current tasks; archived-task discovery remains unavailable.
 """
 
 from urllib.parse import quote
@@ -15,13 +16,12 @@ from .base import (
     JsonTransport,
     Message,
     ProviderAccount,
-    ProviderUnavailable,
     SchemaChanged,
 )
 
 
-FINGERPRINT = "codex-cloud-current-turn-v1:74d3a5bf"
-CAPABILITIES = ("list_current_tasks", "read_current_turn")
+FINGERPRINT = "codex-cloud-turn-graph-v2:2026-09-08"
+CAPABILITIES = ("list_current_tasks", "read_turn_graph", "read_current_turn")
 EVIDENCE_URL = (
     "https://github.com/openai/codex/blob/"
     "74d3a5bf1046f004ee33a200ee497dc7593a5687/"
@@ -115,7 +115,7 @@ class CodexProvider:
     """The session broker attests account identity; task reads verify access."""
 
     capabilities = CAPABILITIES
-    coverage = "current_tasks_current_turn_only"
+    coverage = "current_tasks_turn_graph"
 
     def __init__(self, session, account_id, account_label=None):
         self.account_id = _required_text(account_id, "broker account id")
@@ -140,7 +140,7 @@ class CodexProvider:
             tuple(_summary(item) for item in _items(payload.get("items"), "tasks")), cursor
         )
 
-    def read_conversation(self, conversation_id):
+    def _details(self, conversation_id):
         remote_id = _required_text(conversation_id, "task id")
         payload = _object(
             self.transport.get(f"/wham/tasks/{quote(remote_id, safe='')}"), "task details"
@@ -148,13 +148,63 @@ class CodexProvider:
         summary = _summary(payload.get("task"))
         if summary.id != remote_id:
             raise SchemaChanged(f"{FINGERPRINT}: task identity mismatch")
+        return summary, payload
+
+    def read_current_turn(self, conversation_id):
+        summary, payload = self._details(conversation_id)
         if not any(key in payload for key in ("current_user_turn", "current_assistant_turn")):
             raise SchemaChanged(f"{FINGERPRINT}: current turns missing")
         messages = _turn_messages(payload.get("current_user_turn"), "user", "current_user_turn")
         messages.extend(_turn_messages(
             payload.get("current_assistant_turn"), "assistant", "current_assistant_turn"
         ))
-        return Conversation(summary.id, summary.title, tuple(messages))
+        return Conversation(summary.id, summary.title, tuple(messages),
+                            coverage="current_turn_only", complete=False)
+
+    def read_conversation(self, conversation_id):
+        summary, _ = self._details(conversation_id)
+        payload = _object(self.transport.get(
+            f"/wham/tasks/{quote(summary.id, safe='')}/turns"
+        ), "task turn graph")
+        if "current_turn_id" not in payload:
+            raise SchemaChanged(f"{FINGERPRINT}: current turn field missing")
+        mapping = _object(payload.get("turn_mapping"), "turn mapping")
+        current = payload.get("current_turn_id")
+        if current is not None:
+            _required_text(current, "current turn")
+            if current not in mapping:
+                raise SchemaChanged(f"{FINGERPRINT}: current turn missing")
+        elif mapping:
+            raise SchemaChanged(f"{FINGERPRINT}: nonempty graph has no current turn")
+        messages = []
+        for identity, value in mapping.items():
+            node = _object(value, "turn node")
+            turn = _object(node.get("turn"), "embedded turn")
+            if node.get("id") != identity or turn.get("id") != identity:
+                raise SchemaChanged(f"{FINGERPRINT}: turn identity mismatch")
+            parent = node.get("parent")
+            if parent is not None and (not isinstance(parent, str) or parent not in mapping):
+                raise SchemaChanged(f"{FINGERPRINT}: turn parent missing")
+            role = turn.get("role")
+            if role not in ("user", "assistant"):
+                raise SchemaChanged(f"{FINGERPRINT}: unknown turn role")
+            parts = _turn_messages(turn, role, identity)
+            # A turn is one graph node; its raw items retain tool and attachment data.
+            items = turn.get("input_items" if role == "user" else "output_items", [])
+            messages.append(Message(identity, role, "\n\n".join(p.text for p in parts),
+                                    parent, turn.get("created_at"), tuple(items)))
+        # Validate every branch so discarded cycles cannot enter the shared corpus.
+        parents = {message.id: message.parent_id for message in messages}
+        for identity in parents:
+            visited = set()
+            cursor = identity
+            while cursor is not None:
+                if cursor in visited:
+                    raise SchemaChanged(f"{FINGERPRINT}: turn graph cycle")
+                visited.add(cursor)
+                cursor = parents[cursor]
+        return Conversation(summary.id, summary.title, tuple(messages), current,
+                            coverage="task_turn_graph", complete=True)
 
     def read_full_history(self, conversation_id):
-        raise ProviderUnavailable("Codex cloud full task history is not evidenced by this adapter")
+        return self.read_conversation(conversation_id)
