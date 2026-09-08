@@ -55,17 +55,17 @@ def saved_conversations(app, monkeypatch, tmp_path):
 @pytest.mark.parametrize("path", [["cloud"], ["cloud", "claude"]])
 def test_cloud_chats_lists_conversations_by_activity(app, saved_conversations, path):
     result = CliRunner().invoke(app.cli, [*path, "chats", "--json", "--limit", "0"])
-    assert [row["uuid"] for row in json.loads(result.output)] == ["second", "first"]
+    assert [row["uuid"] for row in json.loads(result.stdout)] == ["second", "first"]
 
 
 def test_cloud_chats_limits_conversations(app, saved_conversations):
     result = CliRunner().invoke(app.cli, ["cloud", "chats", "--json", "--limit", "1"])
-    assert [row["title"] for row in json.loads(result.output)] == ["Second conversation"]
+    assert [row["title"] for row in json.loads(result.stdout)] == ["Second conversation"]
 
 
 def test_cached_accounts_preserves_group_counts(app, saved_conversations):
     result = CliRunner().invoke(app.cli, ["cloud", "cached-accounts", "--json"])
-    assert [(row["cwd"], row["threads"]) for row in json.loads(result.output)] == [("claude-chat:personal", 2)]
+    assert [(row["cwd"], row["threads"]) for row in json.loads(result.stdout)] == [("claude-chat:personal", 2)]
 
 
 def test_cloud_chats_human_output_has_titles(app, saved_conversations):
@@ -80,7 +80,7 @@ def test_cloud_chats_displays_account_label(app, saved_conversations):
 
 def test_cloud_chats_json_preserves_account_identity(app, saved_conversations):
     result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--json", "--limit", "1"])
-    assert json.loads(result.output)[0]["cwd"] == "claude-chat:personal"
+    assert json.loads(result.stdout)[0]["cwd"] == "claude-chat:personal"
 
 
 def test_cloud_chats_explains_unread_marker(app, saved_conversations):
@@ -91,7 +91,7 @@ def test_cloud_chats_explains_unread_marker(app, saved_conversations):
 def test_claude_does_not_inherit_openai_account_label(app, saved_conversations, monkeypatch):
     monkeypatch.setattr(app, "_chatgpt_cached_accounts", lambda: [{"account_id": "personal", "email": "openai@example.test"}])
     result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--json"])
-    assert json.loads(result.output)[1]["account_label"] == "personal"
+    assert json.loads(result.stdout)[1]["account_label"] == "personal"
 
 
 def test_cloud_chats_process_lists_individual_conversations(saved_conversations):
@@ -136,7 +136,37 @@ def test_local_search_never_contacts_cloud(app, monkeypatch):
 def test_cloud_search_reads_cache_without_auth(app, monkeypatch):
     monkeypatch.setattr(app, "_sessions_for_scope", lambda *args: [])
     monkeypatch.setattr(app, "_chatgpt_accounts", lambda: pytest.fail("Cached search contacted authentication"))
-    assert CliRunner().invoke(app.cli, ["cloud", "search", "needle", "--json"]).output == "[]\n"
+    assert CliRunner().invoke(app.cli, ["cloud", "search", "needle", "--json"]).stdout == "[]\n"
+
+
+def test_saved_reader_labels_cache(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--json"])
+    assert "Saved history" in result.stderr
+
+
+def test_refresh_failure_does_not_return_saved_rows(app, saved_conversations, monkeypatch):
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter(()))
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--refresh", "--json"])
+    assert result.stdout == ""
+
+
+def test_refresh_invokes_sync_before_read(app, saved_conversations, monkeypatch):
+    calls = []
+    monkeypatch.delenv("ONE_CONV_SESSION_FILE", raising=False)
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter([{"account_id": "personal"}]))
+    monkeypatch.setattr(cloud_cli, "browser_provider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cloud_cli, "synchronize", lambda *args, **kwargs: calls.append(kwargs["limit"]) or {})
+    CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--refresh", "--json"])
+    assert calls == [100]
+
+
+def test_login_opens_selected_browser_without_keychain(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: calls.append(command))
+    monkeypatch.setattr(native_auth, "read_secret", lambda *args, **kwargs: pytest.fail("Login cannot prompt for Keychain"))
+    CliRunner().invoke(app.cli, ["cloud", "claude", "connect", "--login", "--browser", "chrome"])
+    assert calls == [["open", "-a", "Google Chrome", "https://claude.ai/login"]]
 
 
 def test_local_rejects_cloud_source(app):
@@ -161,7 +191,7 @@ def test_canonical_pull_routes_to_product(app, monkeypatch, product, source):
     monkeypatch.setattr(cloud_cli, "synchronize", lambda provider, selected, limit: {"product": selected, "limit": limit})
     monkeypatch.delenv("ONE_CONV_SESSION_FILE", raising=False)
     result = CliRunner().invoke(app.cli, ["cloud", product, "pull", "--account", "personal", "--limit", "2"])
-    assert json.loads(result.output) == {"product": source, "limit": 2}
+    assert json.loads(result.stdout) == {"product": source, "limit": 2}
 
 
 def test_accounts_never_serialize_sessions(app, monkeypatch):
@@ -169,7 +199,7 @@ def test_accounts_never_serialize_sessions(app, monkeypatch):
         "account_id": "personal", "session": object(), "cookies": {"secret": "hidden"},
     }]))
     result = CliRunner().invoke(app.cli, ["cloud", "claude", "accounts", "--json"])
-    assert json.loads(result.output) == [{"account_id": "personal", "email": None, "organization_id": None,
+    assert json.loads(result.stdout) == [{"account_id": "personal", "email": None, "organization_id": None,
                                          "organization_label": None, "profile": None}]
 
 
@@ -179,7 +209,7 @@ def test_pull_automatically_selects_single_account(app, monkeypatch):
     monkeypatch.setattr(cloud_cli, "browser_provider", lambda product, selector, *args, **kwargs: selector)
     monkeypatch.setattr(cloud_cli, "synchronize", lambda provider, product, limit: {"account": provider})
     result = CliRunner().invoke(app.cli, ["cloud", "claude", "pull"])
-    assert json.loads(result.output) == {"account": "personal"}
+    assert json.loads(result.stdout) == {"account": "personal"}
 
 
 def test_pull_reports_inaccessible_browser_instead_of_managed_file(app, monkeypatch):

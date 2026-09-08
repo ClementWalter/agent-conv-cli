@@ -23,6 +23,15 @@ one-conv local thread PROJECT --source claude
 first (default 30; `--limit 0` lists all). `cloud cached-accounts` lists saved
 account groups and counts. Product `accounts` commands discover browser logins;
 `pull` fetches history. Listing conversations does not contact providers.
+Cloud readers announce saved-history mode on stderr. Product readers support
+`--refresh` to fetch up to 100 conversations first; failures stop the command
+without silently substituting cached results. Older saved conversations can
+still appear in the resulting list.
+
+Use `one-conv cloud claude connect --login --browser chrome` to open provider
+sign-in, then `one-conv cloud claude accounts` to verify the account. An existing
+personal login must be switched to work, or kept in a separate browser profile.
+Plain `connect` authorizes Keychain access, not provider login.
 
 Each cloud product has `connect`, `accounts`, `pull`, `chats`, `read`, `thread`, `search`,
 `find`, and `unread`. Readers use saved history; only `pull` and account discovery

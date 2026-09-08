@@ -59,6 +59,29 @@ def _reader(command, sources, path):
                 parameter.show_default = True
     example_args = " QUERY" if command.name in ("read", "thread", "search", "find", "fork", "port", "send") else ""
     result.epilog = f"\b\nExamples:\n  {path} {command.name}{example_args} --help"
+    if command.name in READ_COMMANDS and set(sources).issubset(CLOUD_PRODUCTS.values()):
+        callback = result.callback
+
+        @click.pass_context
+        def read_saved(context, refresh=False, **kwargs):
+            if refresh:
+                from contextlib import redirect_stdout
+                from .cloud_cli import sync
+                import sys
+                name = next(name for name, product in CLOUD_PRODUCTS.items() if product == sources[0])
+                click.echo("Fetching fresh history from the provider...", err=True)
+                # Reports go to stderr so conversation JSON remains pipeable.
+                with redirect_stdout(sys.stderr):
+                    context.invoke(_pull(sync, name, sources[0]))
+            message = ("Live refresh completed. Showing saved history, including older cached conversations and other accounts."
+                       if refresh else "Saved history only; no network request. Run a product reader with --refresh or use pull for fresh data.")
+            click.echo(message, err=True)
+            return callback(**kwargs)
+
+        result.callback = read_saved
+        if len(sources) == 1:
+            result.params.append(click.Option(["--refresh"], is_flag=True,
+                help="Pull fresh history first (up to 100 conversations); fail if refresh fails."))
     return result
 
 
@@ -197,8 +220,23 @@ def _connect(name):
                 "chromium": "Chromium Safe Storage"}
 
     @click.pass_context
-    def invoke(context, browser):
+    def invoke(context, browser, login):
         from .native_auth import read_secret
+        if login:
+            url = "https://claude.ai/login" if name in ("claude", "cowork") else "https://chatgpt.com/auth/login"
+            import subprocess
+            import sys
+            apps = {"chrome": "Google Chrome", "arc": "Arc", "brave": "Brave Browser",
+                    "edge": "Microsoft Edge", "chromium": "Chromium"}
+            if sys.platform != "darwin":
+                raise click.ClickException("Opening a selected browser currently supports macOS only.")
+            try:
+                subprocess.run(["open", "-a", apps[browser], url], check=True, capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                raise click.ClickException("Could not open the selected browser for login.") from None
+            click.echo(f"Finish provider sign-in in {browser}, then run one-conv cloud {name} accounts to verify it. "
+                       "Opening this page does not mean the account is connected.", err=True)
+            return
         click.echo(f"Authorizing {browser} access. Choose Always Allow in the macOS dialog to reuse this authorization.", err=True)
         try:
             secret = read_secret(services[browser], authorize=True)
@@ -211,7 +249,8 @@ def _connect(name):
         context.invoke(_accounts(name), as_json=False)
 
     return click.Command("connect", callback=invoke,
-                         params=[click.Option(["--browser"], type=click.Choice(tuple(services)),
+                         params=[click.Option(["--login"], is_flag=True, help="Open provider sign-in instead of requesting Keychain authorization."),
+                                 click.Option(["--browser"], type=click.Choice(tuple(services)),
                                               default="chrome", show_default=True,
                                               help="Authorize this browser only.")],
                          help="Authorize a stable native helper once; normal pulls never prompt.",

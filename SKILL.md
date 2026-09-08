@@ -42,6 +42,16 @@ saved history without contacting authentication services.
 `chats` commands restrict that list to one product. `--limit 0` lists all saved
 conversations. `cloud cached-accounts` lists account groups and cached counts;
 product `accounts` discovers accessible browser logins. Listing never pulls.
+Every cloud reader identifies saved history on stderr, keeping JSON stdout clean.
+Product readers accept `--refresh` to pull up to 100 conversations before reading;
+failed refreshes return an error instead of silently displaying old results.
+The result still includes older saved conversations, not just the refreshed batch.
+
+`cloud claude connect --login --browser chrome` opens Claude sign-in. If Chrome
+already has another Claude account, switch accounts there or use a separate
+browser profile to keep both live. Verify with `cloud claude accounts` after
+sign-in. Opening a login page does not verify a connection. Plain `connect`
+authorizes Keychain access; it does not sign in to the provider.
 
 ```bash
 one-conv cloud claude connect --browser chrome
