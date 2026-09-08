@@ -1980,8 +1980,10 @@ def _handle_iter_turns(handle: SessionHandle, include_subagents: bool) -> list[T
     if handle.source in CLOUD_SOURCES or (handle.source == "chatgpt" and handle.path.parent.parent == Path(os.environ.get("ONE_CONV_CLOUD_CACHE", str(Path.home() / ".cache/one-conv-cli/cloud")))):
         rows = json.loads(handle.path.read_text()).get("turns", [])
         return [Turn(ts=row.get("ts") or "", role=row.get("role") or "user",
-                     blocks=[{"type": "text", "text": row.get("text") or
-                         json.dumps(row.get("content_blocks") or [], ensure_ascii=False)}])
+                     blocks=(row["content_blocks"] if handle.source in ("claude-chat", "cowork-cloud")
+                             and row.get("content_blocks") else
+                             [{"type": "text", "text": row.get("text") or
+                               json.dumps(row.get("content_blocks") or [], ensure_ascii=False)}]))
                 for row in rows if row.get("role") != "structure" and
                 (row.get("text") or row.get("content_blocks"))]
     if handle.source == "claude":
@@ -2012,6 +2014,9 @@ def _handle_token_total(handle: SessionHandle) -> int | None:
 
 
 def _handle_drop_noise(handle: SessionHandle, turns: list[Turn]) -> list[Turn]:
+    if handle.source in ("claude-chat", "cowork-cloud"):
+        # Provider block types distinguish conversation prose from tool traffic.
+        return [turn for turn in turns if _render_turn(turn, raw=False) is not None]
     if handle.source == "claude":
         return _drop_tool_injected_followups(turns)
     if handle.source == "codex":

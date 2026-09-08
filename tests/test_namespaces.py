@@ -129,6 +129,41 @@ def test_cloud_read_process_resolves_id(saved_conversations):
     assert json.loads(result.stdout)["session"] == "second"
 
 
+@pytest.fixture
+def cloud_tool_history(saved_conversations):
+    path = saved_conversations / "account" / "second.json"
+    document = json.loads(path.read_text())
+    document["turns"] = [
+        {"role": "user", "text": "Question", "content_blocks": [{"type": "text", "text": "Question"}]},
+        {"role": "assistant", "text": "[Thinking block retained in source content]", "content_blocks": [{"type": "thinking", "thinking": "internal-marker"}]},
+        {"role": "assistant", "text": "[Tool call: Lookup]", "content_blocks": [{"type": "tool_use", "name": "Lookup", "input": {"query": "tool-marker"}}]},
+        {"role": "user", "text": "[Tool result]", "content_blocks": [{"type": "tool_result", "content": "result-marker"}]},
+        {"role": "assistant", "text": "Answer\n[Tool call]", "content_blocks": [{"type": "text", "text": "Answer"}, {"type": "tool_use", "name": "Lookup", "input": {}}]},
+    ]
+    path.write_text(json.dumps(document))
+    return path
+
+
+@pytest.mark.parametrize("source", ["claude-chat", "cowork-cloud"])
+def test_cloud_compact_read_hides_tools_and_thinking(app, cloud_tool_history, source):
+    document = json.loads(cloud_tool_history.read_text())
+    document["source"] = source
+    cloud_tool_history.write_text(json.dumps(document))
+    result = CliRunner().invoke(app.cli, ["cloud", "read", "second", "--json", "--no-mark-read"])
+    assert [turn["text"] for turn in json.loads(result.stdout)["turns"]] == ["Question", "Answer"]
+
+
+@pytest.mark.parametrize("marker", ["internal-marker", "Lookup", "result-marker"])
+def test_cloud_raw_read_preserves_details(app, cloud_tool_history, marker):
+    result = CliRunner().invoke(app.cli, ["cloud", "read", "second", "--raw", "--json", "--no-mark-read"])
+    assert marker in result.stdout
+
+
+def test_cloud_list_counts_visible_turns(app, cloud_tool_history):
+    result = CliRunner().invoke(app.cli, ["cloud", "chats", "--json"])
+    assert next(row for row in json.loads(result.stdout) if row["uuid"] == "second")["turns"] == 2
+
+
 def test_short_help_survives_legacy_help_cache(app):
     CliRunner().invoke(cloud_cli.cloud_group, ["--help"])
     namespaces.install(app.cli, lambda: iter(()), lambda: iter(()))
