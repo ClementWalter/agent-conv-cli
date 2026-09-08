@@ -60,6 +60,13 @@ def test_next_cursor_is_preserved():
     assert provider.list_conversations().next_cursor == "next"
 
 
+@pytest.mark.parametrize(("requested", "sent"), [(1, 1), (20, 20), (50, 20), (100, 20)])
+def test_page_limit_respects_upstream_maximum(requested, sent):
+    session = SessionStub({"items": [], "cursor": None})
+    CodexProvider(session, "account").list_conversations(limit=requested)
+    assert session.requests[0][1]["params"]["limit"] == sent
+
+
 def test_validation_discloses_partial_coverage():
     provider = CodexProvider(SessionStub({"items": []}), "account")
     assert provider.validate_connection().capabilities == CAPABILITIES

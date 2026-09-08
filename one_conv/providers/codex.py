@@ -129,7 +129,8 @@ class CodexProvider:
     def list_conversations(self, cursor=None, limit=50):
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("Limit must be between 1 and 100")
-        params = {"limit": limit, "task_filter": "current"}
+        # The upstream endpoint caps pages at 20; callers can paginate larger pulls.
+        params = {"limit": min(limit, 20), "task_filter": "current"}
         if cursor is not None:
             params["cursor"] = _required_text(cursor, "cursor")
         payload = _object(self.transport.get("/wham/tasks/list", params), "task page")
