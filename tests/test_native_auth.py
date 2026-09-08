@@ -48,7 +48,7 @@ def test_authorization_explicitly_selects_interactive_mode(monkeypatch, installe
         return subprocess.CompletedProcess(command, 3, b"", b"")
     monkeypatch.setattr(native_auth.subprocess, "run", run)
     native_auth.read_secret("Chrome Safe Storage", authorize=True)
-    assert calls == [([str(installed), "authorize", "Chrome Safe Storage"], 180)]
+    assert calls == [([str(installed), "authorize", "Chrome Safe Storage"], 600)]
 
 
 def test_returns_secret_only_on_success(monkeypatch, installed):

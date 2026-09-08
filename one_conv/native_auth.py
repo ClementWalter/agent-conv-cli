@@ -83,7 +83,7 @@ def read_secret(service: str, *, authorize: bool = False) -> bytes | None:
         if not _installed(path):
             return None
         result = subprocess.run([str(path), "authorize" if authorize else "read", service],
-                                capture_output=True, timeout=180 if authorize else 10)
+                                capture_output=True, timeout=600 if authorize else 10)
     except NativeAuthError:
         if authorize:
             raise
