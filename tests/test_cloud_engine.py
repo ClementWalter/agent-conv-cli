@@ -204,7 +204,7 @@ def test_public_cloud_help(cli_module):
 
 def test_public_cloud_provider_coverage(cli_module):
     result = CliRunner().invoke(cli_module.cli, ["cloud", "providers"])
-    assert next(row for row in json.loads(result.output) if row["product"] == "cowork-cloud")["adapter"] == "unsupported"
+    assert next(row for row in json.loads(result.output) if row["product"] == "cowork-cloud")["adapter"] == "experimental"
 
 
 def test_default_offline_search_reads_cached_claude_chat(cli_module, tmp_path, conversation):

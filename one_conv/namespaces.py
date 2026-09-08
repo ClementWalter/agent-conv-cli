@@ -98,10 +98,7 @@ def _refresh_accounts(context, sources):
     errors = []
     refreshed = 0
     for product in sources:
-        if product == "cowork-cloud":
-            click.echo("cowork-cloud: skipped (adapter unsupported).", err=True)
-            continue
-        key = "claude_accounts" if product == "claude-chat" else "browser_accounts"
+        key = "claude_accounts" if product in ("claude-chat", "cowork-cloud") else "browser_accounts"
         if key not in discovered:
             try:
                 discovered[key] = list(context.obj[key]())
@@ -179,7 +176,7 @@ def install(root, browser_accounts, claude_accounts):
                             help={"chatgpt": "ChatGPT web conversations.",
                                   "claude": "Claude web conversations (not local Claude Code).",
                                   "codex": "Codex cloud tasks (not local Codex CLI).",
-                                  "cowork": "Cowork cloud tasks; transcript access is not yet verified."}[name],
+                                  "cowork": "Cowork cloud sessions and their saved event transcripts."}[name],
                             context_settings=HELP_SETTINGS,
                             epilog=f"\b\nExamples:\n  one-conv cloud {name} accounts\n  one-conv cloud {name} pull --help\n  one-conv cloud {name} chats")
         for reader in READ_COMMANDS:
@@ -195,9 +192,9 @@ def _pull(sync, name, product):
     """Bind the provider once so every cloud product has the same pull shape."""
     @click.pass_context
     def invoke(context, **kwargs):
-        if (product != "cowork-cloud" and kwargs.get("browser_account") is None
+        if (kwargs.get("browser_account") is None
                 and kwargs.get("session_file") is None):
-            callback_key = "claude_accounts" if product == "claude-chat" else "browser_accounts"
+            callback_key = "claude_accounts" if product in ("claude-chat", "cowork-cloud") else "browser_accounts"
             from .providers.base import ProviderError
             try:
                 accounts = list(context.obj[callback_key]())

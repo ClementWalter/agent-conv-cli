@@ -16,7 +16,7 @@ PRODUCTS = ("chatgpt", "claude-chat", "codex-cloud", "cowork-cloud")
 
 def browser_provider(product, selector, accounts, organization=None):
     """Reuse the launcher's authenticated sessions only after explicit selection."""
-    if product not in ("chatgpt", "codex-cloud", "claude-chat"):
+    if product not in PRODUCTS:
         raise click.ClickException("Browser sessions do not yet support this cloud product.")
     if not callable(accounts):
         raise click.ClickException("Browser accounts are unavailable in this client.")
@@ -38,6 +38,11 @@ def browser_provider(product, selector, accounts, organization=None):
                                  authenticated_account=ProviderAccount(account["account_id"],
                                      account.get("organization_label") or account["organization_id"],
                                      ("claude_chat:list", "claude_chat:read")))
+    if product == "cowork-cloud":
+        from .providers.cowork import CoworkProvider, CAPABILITIES
+        return CoworkProvider(account["session"], account["organization_id"],
+                              authenticated_account=ProviderAccount(account["account_id"],
+                                  account.get("organization_label") or account["organization_id"], CAPABILITIES))
     if product == "chatgpt":
         from .providers.chatgpt import ChatGPTProvider
         return ChatGPTProvider(account["session"], authenticated_account=ProviderAccount(
@@ -51,7 +56,7 @@ def browser_provider(product, selector, accounts, organization=None):
 def session_provider(product, path, organization):
     """Accept a private broker-provisioned session; never inspect browser stores."""
     if product == "cowork-cloud":
-        raise click.ClickException("Cowork cloud routes are not verified; no request was made.")
+        raise click.ClickException("Cowork requires browser authentication; use cloud cowork pull --account ACCOUNT.")
     if path is None:
         raise click.ClickException("No managed session is configured. The cloud login flow is not implemented yet.")
     try:
@@ -108,7 +113,7 @@ def providers():
         {"product": "chatgpt", "adapter": "experimental", "coverage": "paginated current conversation branch", "verification": "browser responses verified 2026-09-08", "hosted_login_verified": False},
         {"product": "claude-chat", "adapter": "experimental", "coverage": "organization chat conversation trees", "verification": "browser responses verified 2026-09-08", "hosted_login_verified": False},
         {"product": "codex-cloud", "adapter": "experimental", "coverage": "current tasks with turn graphs", "verification": "browser responses verified 2026-09-08", "hosted_login_verified": False},
-        {"product": "cowork-cloud", "adapter": "unsupported", "coverage": "no sample cloud task in connected account", "verification": "empty Cowork history observed 2026-09-08", "hosted_login_verified": False},
+        {"product": "cowork-cloud", "adapter": "experimental", "coverage": "remote Cowork sessions with paginated event snapshots", "verification": "session and event routes observed 2026-09-08", "hosted_login_verified": False},
     ]))
 
 
@@ -129,7 +134,7 @@ def sync(context, product, session_file, browser_account, organization, limit):
         raise click.UsageError("--browser-account and --session-file are mutually exclusive.")
     try:
         if browser_account is not None:
-            callback = "claude_accounts" if product == "claude-chat" else "browser_accounts"
+            callback = "claude_accounts" if product in ("claude-chat", "cowork-cloud") else "browser_accounts"
             provider = browser_provider(product, browser_account,
                                         (context.obj or {}).get(callback), organization=organization)
         else:

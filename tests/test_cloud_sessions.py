@@ -16,7 +16,7 @@ def test_missing_session_explains_login_gap():
 
 
 def test_cowork_makes_no_session_request():
-    with pytest.raises(click.ClickException, match="no request was made"):
+    with pytest.raises(click.ClickException, match="requires browser authentication"):
         session_provider("cowork-cloud", Path("absent"), None)
 
 

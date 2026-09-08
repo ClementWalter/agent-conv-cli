@@ -18,13 +18,14 @@ The experimental cloud path separates three responsibilities:
 | ChatGPT | `chatgpt.py` | Paginated current conversation branch; separate legacy graph reader | Browser listing and two transcript responses verified; older-message pagination observed |
 | Claude Chat | `anthropic.py` | Explicit organization, v2 conversation listing and message tree | Four conversations listed; two real transcripts parsed |
 | Codex cloud | `codex.py` | Current tasks and full returned turn graphs | Three tasks listed; two task graphs parsed |
-| Cowork cloud | None | No populated sample to establish transcript schema | Connected account's Cowork filter returned no activity |
+| Cowork cloud | `cowork.py` | Remote sessions with paginated event snapshots | Zama task listed and its transcript pulled through the CLI on 2026-09-08 |
 
 Codex reads the returned turn graph, including its active branch, for current
 tasks. Archived discovery is not implemented; the browser's archived listing
 was empty. Claude Code and Cowork are not inferred from Claude Chat access.
 Provider capabilities remain distinct from account login. `one-conv cloud
-providers` reports these limits; Cowork sync explicitly fails without a request.
+providers` reports these limits. Cowork uses browser authentication; managed
+session-file authentication is not implemented for it.
 
 Live evidence was collected on 2026-09-08 from authenticated Chrome interface
 requests through the supported browser connection. Response bodies were fed
@@ -137,6 +138,8 @@ contract. They can migrate independently without changing the normalized API.
 - Claude Chat routes are based on public reverse-engineering implementations,
   not an official contract: [exporter route notes](https://github.com/glebmish/claude-exporter/blob/main/docs/claude-ai-api.md)
   and [export implementation](https://gist.github.com/jas-ho/f95abd89d4e007eac9ee821d7c2a3d0b).
-- Cowork investigation found generic managed-agent sessions and local desktop
-  bridge code but no verified populated consumer cloud history response. An
-  authenticated list/detail observation remains necessary; no route is fabricated.
+- Cowork routes were observed on a populated Zama task: `/v1/code/sessions`
+  filtered by `tags=cowork-remote`, session detail, and `/events`. The web client
+  uses `cursor`/`next_cursor` pagination, distinct from its streaming resume
+  cursor. Snapshots retain message content blocks; operational control events
+  are excluded. Local Cowork sessions and hosted login are outside this adapter.

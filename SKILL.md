@@ -24,7 +24,7 @@ one-conv local --help
 - `cloud chatgpt`: ChatGPT web conversations.
 - `cloud claude`: Claude web chat, distinct from local Claude Code.
 - `cloud codex`: Codex cloud tasks, distinct from local Codex CLI.
-- `cloud cowork`: Cowork cloud tasks; transcript access remains unverified.
+- `cloud cowork`: remote Cowork sessions and paginated event transcripts.
 - `local`: local Claude Code, Codex CLI, Cursor, Oh My Pi and corpus files.
 
 Old top-level commands remain compatibility aliases. Prefer namespaces for new

@@ -54,7 +54,9 @@ both Claude and OpenAI then reuse that helper silently. Ordinary CLI updates
 leave the helper executable untouched. This local build uses ad hoc signing;
 replacing the helper can require renewed authorization. The initial local build
 requires macOS developer tools; passive pulls never compile or prompt.
-Cowork's transcript endpoint remains unverified and its pull fails explicitly.
+Cowork uses the Claude browser login and reads remote sessions with paginated
+event transcripts, including tool questions. A complete snapshot does not mean
+the underlying task has finished. Hosted session-file login remains unavailable.
 See [PROVIDERS.md](PROVIDERS.md) for coverage and live verification limits.
 
 ## Compatibility reference
@@ -416,5 +418,6 @@ Same idea — your own messages, from the terminal, for other channels
 Codex cloud and Cowork cloud. See [provider architecture and limits](PROVIDERS.md)
 for session-based sync, API-change handling and current verification status.
 ChatGPT, Claude Chat and Codex task-graph parsers are checked against actual
-signed-in browser responses; Cowork cloud still needs a populated sample.
+signed-in browser responses; Cowork listing and event retrieval were also
+verified through a live Zama CLI pull on 2026-09-08.
 A hosted user login flow is not implemented yet.

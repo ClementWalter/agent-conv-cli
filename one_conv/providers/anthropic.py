@@ -2,7 +2,7 @@
 
 The authenticated web interface uses an offset-paged conversation listing and
 message trees. These private routes are not a supported Anthropic API contract.
-Cowork cloud is deliberately excluded until its own session routes are verified.
+Cowork cloud uses a separate session-event adapter.
 """
 
 from __future__ import annotations

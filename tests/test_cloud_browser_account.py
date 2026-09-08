@@ -59,7 +59,7 @@ def test_unsupported_provider_never_acquires_accounts():
     def unavailable():
         raise RuntimeError("Account acquisition must not run")
     with pytest.raises(click.ClickException, match="do not yet support"):
-        cloud_cli.browser_provider("cowork-cloud", "personal", unavailable)
+        cloud_cli.browser_provider("unknown-provider", "personal", unavailable)
 
 
 def test_mutually_exclusive_credentials():

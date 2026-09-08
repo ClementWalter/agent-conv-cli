@@ -173,7 +173,7 @@ def refresh_accounts(app, monkeypatch, saved_conversations):
 def test_global_refresh_visits_all_supported_accounts(app, refresh_accounts):
     CliRunner().invoke(app.cli, ["cloud", "chats", "--refresh", "--json"])
     assert refresh_accounts == [("chatgpt", "personal"), ("chatgpt", "work"),
-                                ("claude-chat", "work"), ("codex-cloud", "personal"), ("codex-cloud", "work")]
+                                ("claude-chat", "work"), ("codex-cloud", "personal"), ("codex-cloud", "work"), ("cowork-cloud", "work")]
 
 
 def test_global_refresh_respects_source_filter(app, refresh_accounts):
@@ -194,7 +194,7 @@ def test_global_refresh_errors_do_not_prevent_other_accounts(app, refresh_accoun
         return product, selector
     monkeypatch.setattr(cloud_cli, "browser_provider", provider)
     CliRunner().invoke(app.cli, ["cloud", "chats", "--refresh", "--json"])
-    assert refresh_accounts == [("claude-chat", "work"), ("codex-cloud", "personal"), ("codex-cloud", "work")]
+    assert refresh_accounts == [("claude-chat", "work"), ("codex-cloud", "personal"), ("codex-cloud", "work"), ("cowork-cloud", "work")]
 
 
 def test_global_refresh_with_no_accounts_fails(app, saved_conversations, monkeypatch):
