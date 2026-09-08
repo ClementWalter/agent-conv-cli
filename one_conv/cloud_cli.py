@@ -14,23 +14,30 @@ from .providers.base import ProviderAccount, ProviderError
 PRODUCTS = ("chatgpt", "claude-chat", "codex-cloud", "cowork-cloud")
 
 
-def browser_provider(product, selector, accounts):
+def browser_provider(product, selector, accounts, organization=None):
     """Reuse the launcher's authenticated sessions only after explicit selection."""
-    if product not in ("chatgpt", "codex-cloud"):
-        raise click.ClickException("--browser-account supports ChatGPT and Codex cloud only.")
+    if product not in ("chatgpt", "codex-cloud", "claude-chat"):
+        raise click.ClickException("Browser sessions do not yet support this cloud product.")
     if not callable(accounts):
         raise click.ClickException("Browser accounts are unavailable in this client.")
     if not selector.strip():
         raise click.ClickException("Choose an exact browser account email or account ID.")
     matches = [account for account in accounts()
-               if selector in (account.get("account_id"), account.get("email"))]
+               if selector in (account.get("account_id"), account.get("email"), account.get("organization_label"), account.get("organization_id"))
+               and (organization is None or organization == account.get("organization_id"))]
     if not matches:
-        raise click.ClickException("No signed-in browser account matches that email or ID.")
+        raise click.ClickException("No signed-in browser account matches that selector or is accessible without authorization. Locked sessions are skipped without prompting.")
     if len(matches) != 1:
         raise click.ClickException("Several accounts share that email; choose an exact account ID.")
     account = matches[0]
     if not account.get("account_id") or account.get("session") is None:
         raise click.ClickException("The selected browser account has no authenticated session.")
+    if product == "claude-chat":
+        from .providers.anthropic import AnthropicProvider
+        return AnthropicProvider(account["session"], account["organization_id"],
+                                 authenticated_account=ProviderAccount(account["account_id"],
+                                     account.get("organization_label") or account["organization_id"],
+                                     ("claude_chat:list", "claude_chat:read")))
     if product == "chatgpt":
         from .providers.chatgpt import ChatGPTProvider
         return ChatGPTProvider(account["session"], authenticated_account=ProviderAccount(
@@ -108,7 +115,7 @@ def providers():
 @cloud_group.command("sync")
 @click.argument("product", type=click.Choice(PRODUCTS))
 @click.option("--session-file", type=click.Path(path_type=Path), envvar="ONE_CONV_SESSION_FILE", help="Private session provisioned by an authentication broker; never a browser database.")
-@click.option("--browser-account", metavar="EMAIL|ID", help="Explicitly reuse one signed-in account from the existing ChatGPT browser adapter (ChatGPT/Codex only).")
+@click.option("--browser-account", metavar="EMAIL|ID|ORG", help="Explicitly reuse a signed-in ChatGPT/Codex account or Claude organization.")
 @click.option("--organization", help="Explicit Claude organization ID.")
 @click.option("--limit", type=click.IntRange(1, 10000), default=100, show_default=True)
 @click.pass_context
@@ -122,8 +129,9 @@ def sync(context, product, session_file, browser_account, organization, limit):
         raise click.UsageError("--browser-account and --session-file are mutually exclusive.")
     try:
         if browser_account is not None:
+            callback = "claude_accounts" if product == "claude-chat" else "browser_accounts"
             provider = browser_provider(product, browser_account,
-                                        (context.obj or {}).get("browser_accounts"))
+                                        (context.obj or {}).get(callback), organization=organization)
         else:
             provider = session_provider(product, session_file, organization)
         report = synchronize(provider, product, limit=limit)

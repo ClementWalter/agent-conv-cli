@@ -1,7 +1,40 @@
 # one-conv-cli
 
-Terminal access to your **own** Claude Code, Codex CLI, Cursor, Oh My Pi, and
-ChatGPT web conversation history — one reader across all five, read-only:
+Read your own conversation history through two command namespaces:
+
+- **`cloud`**: ChatGPT, Claude Chat, Codex cloud, and experimental Cowork.
+- **`local`**: Claude Code, Codex CLI, Cursor, Oh My Pi, and the shared corpus on disk.
+
+```bash
+one-conv cloud claude accounts --json
+one-conv cloud claude pull --account Zama --limit 10
+one-conv cloud claude chats --json
+one-conv cloud claude thread QUERY
+one-conv cloud chatgpt pull --account EMAIL --limit 10
+one-conv cloud codex pull --account EMAIL --limit 10
+one-conv cloud search QUERY
+one-conv local chats
+one-conv local search QUERY
+one-conv local thread PROJECT --source claude
+```
+
+Each cloud product has `accounts`, `pull`, `chats`, `read`, `thread`, `search`,
+`find`, and `unread`. Readers use saved history; only `pull` and account discovery
+contact providers. `local` never discovers cloud accounts. Product names remove
+the ambiguity between `cloud claude` and local Claude Code, or `cloud codex` and
+local Codex CLI.
+
+Claude uses the same browser-session strategy as OpenAI, with organization name
+or ID selection. Session discovery never prompts for Keychain passwords; a
+protected browser key can therefore make a signed-in account unavailable to the
+CLI. Cowork's transcript endpoint remains unverified and its pull fails explicitly.
+See [PROVIDERS.md](PROVIDERS.md) for coverage and live verification limits.
+
+## Compatibility reference
+
+Existing top-level commands below remain callable for scripts and integrations,
+but are omitted from the main help. Their cross-source behavior is preserved.
+Prefer the namespaces above for new usage.
 
 ```bash
 one-conv chats                        # projects (channels) across every source, most recent first
@@ -38,7 +71,7 @@ Unlike Slack, there's no "loose message outside any thread" — every turn
 belongs to some session, so a project has nothing to show beyond its
 threads.
 
-## Five sources, one model
+## Compatibility reader internals
 
 - **Claude Code** — `~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`, one
   JSON-lines file per session (Anthropic Messages API shape).

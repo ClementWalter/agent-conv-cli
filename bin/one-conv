@@ -1235,9 +1235,10 @@ def _chatgpt_decrypt_cookie(encrypted: bytes, key: bytes) -> str | None:
         return None
 
 
-def _chatgpt_cookie_jars():
-    """Yield (profile_label, cookie dict) for every local Chromium profile
-    holding chatgpt.com cookies."""
+def _chatgpt_cookie_jars(domain="chatgpt.com", required_cookie="__Secure-next-auth.session-token"):
+    """Yield provider-scoped browser sessions only when Keychain permits silent access."""
+    if domain not in ("chatgpt.com", "claude.ai"):
+        raise ValueError("Unsupported conversation provider domain")
     keys: dict[str, bytes | None] = {}
     for label, pattern, service in CHATGPT_COOKIE_SOURCES:
         for store in sorted(glob.glob(str(Path(pattern).expanduser()))):
@@ -1253,7 +1254,7 @@ def _chatgpt_cookie_jars():
                     con = sqlite3.connect(f"file:{tmp}?immutable=1", uri=True)
                     rows = con.execute(
                         "SELECT name, encrypted_value FROM cookies "
-                        "WHERE host_key IN ('chatgpt.com', '.chatgpt.com')"
+                        "WHERE host_key IN (?, ?)", (domain, "." + domain)
                     ).fetchall()
                     con.close()
                 except (OSError, sqlite3.Error):
@@ -1270,8 +1271,14 @@ def _chatgpt_cookie_jars():
                 jar["__Secure-next-auth.session-token"] = "".join(jar[k] for k in chunks)
                 for k in chunks:
                     jar.pop(k)
-            if jar.get("__Secure-next-auth.session-token"):
+            if jar.get(required_cookie):
                 yield f"{label}/{Path(store).parent.name}", jar
+
+
+def _claude_accounts():
+    """Reuse provider-scoped browser session discovery for Claude organization access."""
+    from one_conv.browser_auth import claude_accounts
+    yield from claude_accounts(lambda: _chatgpt_cookie_jars("claude.ai", "sessionKey"))
 
 
 def _chatgpt_client(jar: dict[str, str]):
@@ -2292,9 +2299,13 @@ def _print_handle_list(cwd_label: str, handles: list[SessionHandle], as_json: bo
 # ---------------------------------------------------------------------------
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+from one_conv.namespaces import NamespaceRoot, install as install_namespaces, selected_sources
+
+
+@click.group(cls=NamespaceRoot, context_settings={"help_option_names": ["-h", "--help"]},
+             epilog="\b\nExamples:\n  one-conv cloud --help\n  one-conv local --help\n\nLegacy top-level commands remain available as compatibility aliases.")
 def cli() -> None:
-    """Read Claude Code / Codex / Cursor / Oh My Pi / ChatGPT web / the shared corpus log."""
+    """Read conversation history from cloud products or local agent tools."""
 
 
 _SOURCE_OPTION = click.option(
@@ -2311,7 +2322,7 @@ _SOURCE_OPTION = click.option(
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 def chats(source_filter: str | None, limit: int, as_json: bool) -> None:
     """List projects (channels) across every source, most recently active first."""
-    sources = (source_filter,) if source_filter else SOURCES
+    sources = selected_sources(source_filter, SOURCES)
     state = _load_read_state()
     projects = sorted(
         (_project_summary_handle(p, state) for p in _iter_all_projects(sources)),
@@ -2359,7 +2370,7 @@ def read(
     `read`/`--expand-thread`. To read exactly one thread in full, use
     `thread QUERY` (Slack's `thread <channel> <ts>`), not this command.
     """
-    sources = (source_filter,) if source_filter else SOURCES
+    sources = selected_sources(source_filter, SOURCES)
     projects = _resolve_projects(query, match, sources)
     sessions = _all_sessions_for(projects)
     session_subset = sessions[:limit] if limit else sessions
@@ -2430,7 +2441,7 @@ def thread(
     (2 = the one before, ...) or target an exact --session UUID. Marks it
     read (see `unread`) unless --no-mark-read is passed.
     """
-    sources = (source_filter,) if source_filter else SOURCES
+    sources = selected_sources(source_filter, SOURCES)
     projects = _resolve_projects(query, match, sources)
     sessions = _all_sessions_for(projects)
     handle = _pick_session_handle(sessions, session_uuid, nth)
@@ -2534,7 +2545,7 @@ def export(out_dir: str, machine: str | None, source_filter: str | None, since: 
     """
     out_root = Path(out_dir).expanduser()
     machine = machine or socket.gethostname().split(".")[0]
-    sources = (source_filter,) if source_filter else SOURCES
+    sources = selected_sources(source_filter, SOURCES)
     cutoff = datetime.fromisoformat(since).timestamp() if since else 0.0
     written, skipped = [], 0
     for project in _iter_all_projects(sources):
@@ -2605,7 +2616,7 @@ def search(text: str, source_filter: str | None, project_query: str | None, limi
     for cursor's SQLite store (no single-file check is possible there) — so
     searching everywhere stays fast even with a lot of history.
     """
-    sources = (source_filter,) if source_filter else SOURCES
+    sources = selected_sources(source_filter, SOURCES)
     needle = text.lower()
     needle_bytes = text.encode("utf-8")
     sessions = _sessions_for_scope(project_query, sources)
@@ -2675,7 +2686,7 @@ def unread(source_filter: str | None, project_query: str | None, limit: int, mar
     whole Claude/Codex/OMP history as unread — run `unread --mark-all-read` once
     to start clean, then let normal usage keep it current.
     """
-    sources = (source_filter,) if source_filter else SOURCES
+    sources = selected_sources(source_filter, SOURCES)
     state = _load_read_state()
     sessions = _sessions_for_scope(project_query, sources)
     unread_handles = [h for h in sessions if _handle_is_unread(h, state)]
@@ -2717,7 +2728,7 @@ def find(text: str, source_filter: str | None, limit: int, as_json: bool) -> Non
     anywhere in a transcript and returns one row per matching turn, this
     matches only the title and returns one row per thread.
     """
-    sources = (source_filter,) if source_filter else SOURCES
+    sources = selected_sources(source_filter, SOURCES)
     needle = text.lower()
     needle_bytes = text.encode("utf-8")
     state = _load_read_state()
@@ -3037,7 +3048,7 @@ def port(
     content gets rendered either way, marks it read (see `unread`) unless
     --no-mark-read is passed.
     """
-    sources = (source_filter,) if source_filter else SOURCES
+    sources = selected_sources(source_filter, SOURCES)
     projects = _resolve_projects(query, match, sources)
     sessions = _all_sessions_for(projects)
     handle = _pick_session_handle(sessions, session_uuid, nth)
@@ -3379,6 +3390,9 @@ def cloud_command(context):
     from one_conv.cloud_cli import cloud_group
     cloud_group.main(args=context.args, prog_name=context.command_path, standalone_mode=False,
                     obj={"browser_accounts": _chatgpt_accounts})
+
+
+install_namespaces(cli, lambda: _chatgpt_accounts(), lambda: _claude_accounts())
 
 
 if __name__ == "__main__":

@@ -70,14 +70,23 @@ separate implementation work in CLOUD_PLAN.md. The cache here belongs to one
 OS user; it is not a multi-tenant server database. No secrets are persisted in
 the conversation cache. No automatic local browser fallback is attempted.
 
-For explicit development verification, `--browser-account EMAIL|ID` reuses the
-existing ChatGPT CLI authentication for ChatGPT and Codex cloud. It is mutually
+For explicit development verification, `one-conv cloud PRODUCT pull --account SELECTOR`
+reuses browser authentication for ChatGPT, Claude Chat and Codex cloud. It is mutually
 exclusive with `--session-file`, and is not a hosted login implementation.
 The authenticated account identity is retained while actual history access is
 checked; an additional token exchange is not required. Live CLI pulls on
 2026-09-08 retrieved two personal ChatGPT conversations and three personal Codex
-tasks. Claude personal browser login and a conversation read also succeeded,
-but Claude CLI session acquisition remains unimplemented.
+tasks. Claude personal browser login and a conversation read also succeeded.
+Claude CLI session acquisition uses the same guarded browser cookie reader,
+scoped to claude.ai, then validates organizations through `/api/organizations`.
+It selects by organization name, organization ID or profile-qualified account ID.
+The live CLI attempt found no session accessible without Keychain interaction;
+its HTTP ingestion is not yet live-verified. Missing access never becomes an
+empty successful sync. `cloud claude accounts --json` lists accessible selectors.
+
+The public hierarchy is `cloud chatgpt|claude|codex|cowork pull`. Internal source
+IDs (`claude-chat`, `codex-cloud`, `cowork-cloud`) remain unchanged in stored data.
+The old `cloud sync PRODUCT` and top-level commands remain compatibility aliases.
 
 The bounded sync refetches up to `--limit` conversations per invocation; it is
 not yet a background incremental scheduler. A capped scan is partial. Absence

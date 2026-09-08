@@ -1,0 +1,153 @@
+"""Namespace dispatch isolates history sources and preserves existing automation."""
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sqlite3
+import sys
+
+from click.testing import CliRunner
+import pytest
+
+from one_conv import cloud_cli, namespaces
+
+
+@pytest.fixture
+def app(monkeypatch):
+    loader = importlib.machinery.SourceFileLoader("namespace_cli", str(Path(__file__).parents[1] / "bin/one-conv"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, loader.name, module)
+    loader.exec_module(module)
+    return module
+
+
+def test_root_lists_only_namespaces(app):
+    result = CliRunner().invoke(app.cli, ["--help"])
+    commands = result.output.split("Commands:\n")[1].split("\n\n")[0]
+    assert [line.strip().split()[0] for line in commands.splitlines()] == ["cloud", "local"]
+
+
+def test_short_help_survives_legacy_help_cache(app):
+    CliRunner().invoke(cloud_cli.cloud_group, ["--help"])
+    namespaces.install(app.cli, lambda: iter(()), lambda: iter(()))
+    assert CliRunner().invoke(app.cli, ["cloud", "-h"]).exit_code == 0
+
+
+@pytest.mark.parametrize("path", ["local", "cloud", "cloud claude", "cloud chatgpt", "cloud codex", "cloud cowork", "cloud claude pull"])
+def test_nested_short_help(app, path):
+    assert CliRunner().invoke(app.cli, [*path.split(), "-h"]).exit_code == 0
+
+
+@pytest.mark.parametrize(("path", "expected"), [
+    (["local"], ("claude", "codex", "cursor", "omp", "corpus")),
+    (["cloud"], ("chatgpt", "claude-chat", "codex-cloud", "cowork-cloud")),
+    (["cloud", "claude"], ("claude-chat",)),
+    (["cloud", "codex"], ("codex-cloud",)),
+])
+def test_readers_discover_only_namespace_sources(app, monkeypatch, path, expected):
+    seen = []
+    monkeypatch.setattr(app, "_load_read_state", lambda: {})
+    monkeypatch.setattr(app, "_iter_all_projects", lambda sources: seen.append(sources) or iter(()))
+    CliRunner().invoke(app.cli, [*path, "chats", "--json"])
+    assert seen == [expected]
+
+
+def test_local_search_never_contacts_cloud(app, monkeypatch):
+    monkeypatch.setattr(app, "_sessions_for_scope", lambda *args: [])
+    monkeypatch.setattr(app, "_cursor_composer_ids_matching", lambda text: set())
+    monkeypatch.setattr(app, "_chatgpt_accounts", lambda: pytest.fail("Local search contacted cloud authentication"))
+    assert CliRunner().invoke(app.cli, ["local", "search", "needle", "--json"]).output == "[]\n"
+
+
+def test_cloud_search_reads_cache_without_auth(app, monkeypatch):
+    monkeypatch.setattr(app, "_sessions_for_scope", lambda *args: [])
+    monkeypatch.setattr(app, "_chatgpt_accounts", lambda: pytest.fail("Cached search contacted authentication"))
+    assert CliRunner().invoke(app.cli, ["cloud", "search", "needle", "--json"]).output == "[]\n"
+
+
+def test_local_rejects_cloud_source(app):
+    assert CliRunner().invoke(app.cli, ["local", "chats", "--source", "chatgpt"]).exit_code == 2
+
+
+def test_legacy_reader_still_spans_every_source(app, monkeypatch):
+    seen = []
+    monkeypatch.setattr(app, "_load_read_state", lambda: {})
+    monkeypatch.setattr(app, "_iter_all_projects", lambda sources: seen.append(sources) or iter(()))
+    CliRunner().invoke(app.cli, ["chats", "--json"])
+    assert seen == [app.SOURCES]
+
+
+def test_legacy_chatgpt_help_remains_available(app):
+    assert CliRunner().invoke(app.cli, ["chatgpt", "sync", "-h"]).exit_code == 0
+
+
+@pytest.mark.parametrize(("product", "source"), [("claude", "claude-chat"), ("chatgpt", "chatgpt"), ("codex", "codex-cloud")])
+def test_canonical_pull_routes_to_product(app, monkeypatch, product, source):
+    monkeypatch.setattr(cloud_cli, "browser_provider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cloud_cli, "synchronize", lambda provider, selected, limit: {"product": selected, "limit": limit})
+    monkeypatch.delenv("ONE_CONV_SESSION_FILE", raising=False)
+    result = CliRunner().invoke(app.cli, ["cloud", product, "pull", "--account", "personal", "--limit", "2"])
+    assert json.loads(result.output) == {"product": source, "limit": 2}
+
+
+def test_accounts_never_serialize_sessions(app, monkeypatch):
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter([{
+        "account_id": "personal", "session": object(), "cookies": {"secret": "hidden"},
+    }]))
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "accounts", "--json"])
+    assert json.loads(result.output) == [{"account_id": "personal", "email": None, "organization_id": None,
+                                         "organization_label": None, "profile": None}]
+
+
+def test_pull_automatically_selects_single_account(app, monkeypatch):
+    monkeypatch.delenv("ONE_CONV_SESSION_FILE", raising=False)
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter([{"account_id": "personal"}]))
+    monkeypatch.setattr(cloud_cli, "browser_provider", lambda product, selector, *args, **kwargs: selector)
+    monkeypatch.setattr(cloud_cli, "synchronize", lambda provider, product, limit: {"account": provider})
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "pull"])
+    assert json.loads(result.output) == {"account": "personal"}
+
+
+def test_pull_reports_inaccessible_browser_instead_of_managed_file(app, monkeypatch):
+    monkeypatch.delenv("ONE_CONV_SESSION_FILE", raising=False)
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter(()))
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "pull"])
+    assert "No browser session is accessible without prompting" in result.output
+
+
+def test_public_process_reads_saved_claude_messages(tmp_path):
+    account = tmp_path / "account"
+    account.mkdir()
+    (account / "thread.json").write_text(json.dumps({
+        "source": "claude-chat", "session": "namespace-thread", "cwd": "claude-chat:namespace-account",
+        "title": "Namespace example", "last": "2026-01-01T00:00:00Z",
+        "turns": [{"role": "user", "text": "namespace-marker", "ts": "2026-01-01T00:00:00Z"}],
+    }))
+    result = subprocess.run([sys.executable, "-O", str(Path(__file__).parents[1] / "bin/one-conv"),
+                             "cloud", "claude", "search", "namespace-marker", "--json"],
+                            env={**os.environ, "ONE_CONV_CLOUD_CACHE": str(tmp_path)},
+                            capture_output=True, text=True, check=True, timeout=10)
+    assert json.loads(result.stdout)[0]["session"] == "namespace-thread"
+
+
+@pytest.mark.parametrize(("domain", "cookie", "value"), [
+    ("claude.ai", "sessionKey", "claude-session"),
+    ("chatgpt.com", "__Secure-next-auth.session-token", "openai-session"),
+])
+def test_browser_discovery_keeps_provider_cookies_separate(app, monkeypatch, tmp_path, domain, cookie, value):
+    store = tmp_path / "Cookies"
+    with sqlite3.connect(store) as connection:
+        connection.execute("CREATE TABLE cookies(host_key TEXT, name TEXT, encrypted_value BLOB)")
+        connection.executemany("INSERT INTO cookies VALUES(?, ?, ?)", [
+            (".claude.ai", "sessionKey", b"claude-session"),
+            (".chatgpt.com", "__Secure-next-auth.session-token", b"openai-session"),
+            ("unrelated.test", "sessionKey", b"unrelated-session"),
+        ])
+    monkeypatch.setattr(app, "CHATGPT_COOKIE_SOURCES", [("synthetic", str(store), "synthetic-service")])
+    monkeypatch.setattr(app, "_chatgpt_keychain_key", lambda service: b"synthetic-key")
+    monkeypatch.setattr(app, "_chatgpt_decrypt_cookie", lambda encrypted, key: encrypted.decode())
+    assert list(app._chatgpt_cookie_jars(domain, cookie))[0][1] == {cookie: value}

@@ -45,8 +45,9 @@ def _optional_text(value, field: str) -> str | None:
 class AnthropicProvider:
     """Keep account scope explicit instead of choosing the first organization."""
 
-    def __init__(self, session, organization_id: str, *, transport=None):
+    def __init__(self, session, organization_id: str, *, transport=None, authenticated_account=None):
         self.organization_id = _text(organization_id, "organization ID")
+        self.authenticated_account = authenticated_account
         self.transport = transport or JsonTransport(
             session, "https://claude.ai", FINGERPRINT
         )
@@ -60,6 +61,8 @@ class AnthropicProvider:
             organization = _object(raw)
             identifier = _text(organization.get("uuid"), "organization ID")
             if identifier == self.organization_id:
+                if self.authenticated_account is not None:
+                    return self.authenticated_account
                 return ProviderAccount(
                     id=identifier,
                     label=_text(organization.get("name"), "organization name", empty=True),

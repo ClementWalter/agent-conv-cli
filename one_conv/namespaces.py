@@ -1,0 +1,171 @@
+"""Separate cloud products from local tools while preserving legacy command dispatch."""
+
+from copy import copy
+
+import click
+
+
+LOCAL_SOURCES = ("claude", "codex", "cursor", "omp", "corpus")
+CLOUD_PRODUCTS = {"chatgpt": "chatgpt", "claude": "claude-chat",
+                  "codex": "codex-cloud", "cowork": "cowork-cloud"}
+READ_COMMANDS = ("chats", "read", "thread", "search", "find", "unread")
+HELP_SETTINGS = {"help_option_names": ["-h", "--help"]}
+
+
+class NamespaceRoot(click.Group):
+    """Keep legacy names callable without mixing them into the primary help."""
+
+    def list_commands(self, context):
+        return [name for name in ("cloud", "local") if name in self.commands]
+
+
+def selected_sources(source, defaults):
+    """Apply namespace boundaries before reading files or contacting providers."""
+    context = click.get_current_context(silent=True)
+    scope = (context.obj or {}).get("history_sources", defaults) if context else defaults
+    if source is not None and source not in scope:
+        raise click.BadParameter("Source is outside this namespace.", param_hint="--source")
+    return (source,) if source else scope
+
+
+def _reader(command, sources, path):
+    """Clone options so scoped help cannot mutate compatibility commands."""
+    result = copy(command)
+    result.params = [copy(parameter) for parameter in command.params]
+    result.context_settings = HELP_SETTINGS
+    result.hidden = False
+    for parameter in result.params:
+        if parameter.name == "source_filter":
+            parameter.type = click.Choice(sources)
+            parameter.help = "Restrict to one source in this namespace."
+    if command.name == "search":
+        # Namespace readers inspect saved history; provider pulls own authentication.
+        result.params = [parameter for parameter in result.params if parameter.name != "offline"]
+        result.callback = lambda **kwargs: command.callback(offline=True, **kwargs)
+    descriptions = {"chats": "List saved projects and accounts.",
+                    "read": "List a saved project's conversations; --expand includes messages.",
+                    "thread": "Read one saved conversation.",
+                    "search": "Search saved messages without contacting providers.",
+                    "find": "Find saved conversations by title.",
+                    "unread": "List saved conversations with unread activity."}
+    result.help = descriptions.get(command.name, command.help)
+    example_args = " QUERY" if command.name in ("read", "thread", "search", "find", "fork", "port", "send") else ""
+    result.epilog = f"\b\nExamples:\n  {path} {command.name}{example_args} --help"
+    return result
+
+
+def _scope_callback(sources, accounts=None):
+    @click.pass_context
+    def configure(context):
+        context.obj = {**(context.obj or {}), "history_sources": sources}
+        if accounts:
+            context.obj.update(accounts)
+    return configure
+
+
+def install(root, browser_accounts, claude_accounts):
+    """Mount product readers and pulls while leaving old invocations intact."""
+    from .cloud_cli import cloud_group, sync
+
+    local = click.Group("local", callback=_scope_callback(LOCAL_SOURCES),
+                        help="Read local agent history and run local agent tools.",
+                        epilog="\b\nExamples:\n  one-conv local chats\n  one-conv local search QUERY",
+                        context_settings=HELP_SETTINGS)
+    for name in (*READ_COMMANDS, "export", "fork", "port", "send", "skill-usage", "append"):
+        local.add_command(_reader(root.commands[name], LOCAL_SOURCES, "one-conv local"))
+    root.add_command(local)
+
+    cloud_sources = tuple(CLOUD_PRODUCTS.values())
+    # Click caches help options on commands, so the namespace owns a fresh group.
+    cloud = click.Group("cloud", commands=dict(cloud_group.commands), context_settings=HELP_SETTINGS)
+    cloud.callback = _scope_callback(cloud_sources, {
+        "browser_accounts": browser_accounts, "claude_accounts": claude_accounts,
+    })
+    cloud.help = "Read cloud conversation history by product. Pull first, then read saved history."
+    cloud.epilog = "\b\nExamples:\n  one-conv cloud claude --help\n  one-conv cloud chatgpt --help\n  one-conv cloud search QUERY"
+    legacy_sync = copy(sync)
+    legacy_sync.hidden = True
+    cloud.add_command(legacy_sync)
+    for name in READ_COMMANDS:
+        cloud.add_command(_reader(root.commands[name], cloud_sources, "one-conv cloud"))
+    for name, product in CLOUD_PRODUCTS.items():
+        group = click.Group(name, callback=_scope_callback((product,)),
+                            help={"chatgpt": "ChatGPT web conversations.",
+                                  "claude": "Claude web conversations (not local Claude Code).",
+                                  "codex": "Codex cloud tasks (not local Codex CLI).",
+                                  "cowork": "Cowork cloud tasks; transcript access is not yet verified."}[name],
+                            context_settings=HELP_SETTINGS,
+                            epilog=f"\b\nExamples:\n  one-conv cloud {name} accounts\n  one-conv cloud {name} pull --help\n  one-conv cloud {name} chats")
+        for reader in READ_COMMANDS:
+            group.add_command(_reader(root.commands[reader], (product,), f"one-conv cloud {name}"))
+        group.add_command(_pull(sync, name, product))
+        group.add_command(_accounts(name))
+        cloud.add_command(group)
+    root.add_command(cloud)
+
+
+def _pull(sync, name, product):
+    """Bind the provider once so every cloud product has the same pull shape."""
+    @click.pass_context
+    def invoke(context, **kwargs):
+        if (product != "cowork-cloud" and kwargs.get("browser_account") is None
+                and kwargs.get("session_file") is None):
+            callback_key = "claude_accounts" if product == "claude-chat" else "browser_accounts"
+            from .providers.base import ProviderError
+            try:
+                accounts = list(context.obj[callback_key]())
+            except ProviderError as error:
+                raise click.ClickException(str(error)) from None
+            if not accounts:
+                raise click.ClickException("No browser session is accessible without prompting. "
+                                           f"Run one-conv cloud {name} accounts to inspect access.")
+            if len(accounts) > 1:
+                raise click.ClickException(f"Several accounts are available. Run one-conv cloud {name} accounts "
+                                           "and select one with --account.")
+            # Reuse this discovery result rather than decrypting the same session twice.
+            context.obj = {**context.obj, callback_key: lambda: iter(accounts)}
+            kwargs["browser_account"] = accounts[0]["account_id"]
+        return context.invoke(sync, product=product, **kwargs)
+
+    parameters = [copy(parameter) for parameter in sync.params if parameter.name != "product"]
+    for parameter in parameters:
+        if parameter.name == "session_file":
+            parameter.hidden = True
+        if parameter.name == "browser_account":
+            parameter.opts = ["--account", "--browser-account"]
+            parameter.help = "Select a signed-in browser account by exact email, name or ID."
+    return click.Command("pull", callback=invoke, params=parameters,
+                         help=("Pull provider history into the saved conversation cache.\n\n"
+                               "Choose an accessible browser account from the accounts command. "
+                               "Keychain access never prompts; locked sessions require setup authorization."),
+                         epilog=f"\b\nExamples:\n  one-conv cloud {name} pull --account ACCOUNT --limit 10",
+                         context_settings=HELP_SETTINGS)
+
+
+def _accounts(name):
+    """Expose verified selectors without serializing HTTP sessions or credentials."""
+    import json
+    from .providers.base import ProviderError
+
+    @click.pass_context
+    def invoke(context, as_json):
+        callback = (context.obj or {}).get("claude_accounts" if name in ("claude", "cowork") else "browser_accounts")
+        try:
+            rows = [{key: account.get(key) for key in (
+                "account_id", "email", "organization_id", "organization_label", "profile")}
+                    for account in callback()]
+        except ProviderError as error:
+            raise click.ClickException(str(error)) from None
+        if as_json:
+            click.echo(json.dumps(rows))
+        elif rows:
+            for row in rows:
+                click.echo(f"{row['account_id']}  {row['email'] or row['organization_label'] or ''}")
+        else:
+            click.echo("No browser account is accessible without prompting. Sign in to the provider and authorize session access during setup.")
+
+    return click.Command("accounts", callback=invoke,
+                         params=[click.Option(["--json", "as_json"], is_flag=True, help="Emit safe account metadata as JSON.")],
+                         help="Discover browser accounts accessible without password prompts.",
+                         epilog=f"\b\nExamples:\n  one-conv cloud {name} accounts --json",
+                         context_settings=HELP_SETTINGS)
