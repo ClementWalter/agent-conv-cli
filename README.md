@@ -28,6 +28,12 @@ Cloud readers announce saved-history mode on stderr. Product readers support
 without silently substituting cached results. Older saved conversations can
 still appear in the resulting list.
 
+`one-conv cloud chats --refresh` refreshes every accessible supported browser
+account across products, then lists their combined saved conversations. It
+fetches up to 100 conversations per account/product. Unsupported products and
+inaccessible accounts are reported as skipped; refresh errors stop the listing
+after attempting the other accounts. `--source` restricts both refresh and listing.
+
 Use `one-conv cloud claude connect --login --browser chrome` to open provider
 sign-in, then `one-conv cloud claude accounts` to verify the account. An existing
 personal login must be switched to work, or kept in a separate browser profile.

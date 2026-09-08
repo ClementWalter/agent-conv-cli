@@ -68,21 +68,65 @@ def _reader(command, sources, path):
                 from contextlib import redirect_stdout
                 from .cloud_cli import sync
                 import sys
-                name = next(name for name, product in CLOUD_PRODUCTS.items() if product == sources[0])
                 click.echo("Fetching fresh history from the provider...", err=True)
                 # Reports go to stderr so conversation JSON remains pipeable.
                 with redirect_stdout(sys.stderr):
-                    context.invoke(_pull(sync, name, sources[0]))
+                    if len(sources) > 1:
+                        _refresh_accounts(context, selected_sources(kwargs.get("source_filter"), sources))
+                    else:
+                        name = next(name for name, product in CLOUD_PRODUCTS.items() if product == sources[0])
+                        context.invoke(_pull(sync, name, sources[0]))
             message = ("Live refresh completed. Showing saved history, including older cached conversations and other accounts."
                        if refresh else "Saved history only; no network request. Run a product reader with --refresh or use pull for fresh data.")
             click.echo(message, err=True)
             return callback(**kwargs)
 
         result.callback = read_saved
-        if len(sources) == 1:
+        if len(sources) == 1 or command.name == "chats":
             result.params.append(click.Option(["--refresh"], is_flag=True,
-                help="Pull fresh history first (up to 100 conversations); fail if refresh fails."))
+                help="Refresh accessible supported accounts first (up to 100 conversations each); fail on refresh errors."))
     return result
+
+
+def _refresh_accounts(context, sources):
+    """Attempt every accessible account, sharing discovery across OpenAI products."""
+    import json
+    from .cloud_cli import browser_provider, synchronize
+    from .providers.base import ProviderError
+
+    discovered = {}
+    errors = []
+    refreshed = 0
+    for product in sources:
+        if product == "cowork-cloud":
+            click.echo("cowork-cloud: skipped (adapter unsupported).", err=True)
+            continue
+        key = "claude_accounts" if product == "claude-chat" else "browser_accounts"
+        if key not in discovered:
+            try:
+                discovered[key] = list(context.obj[key]())
+            except (ProviderError, click.ClickException) as error:
+                discovered[key] = None
+                errors.append(f"{key}: {error}")
+        accounts = discovered[key]
+        if accounts is None:
+            continue
+        if not accounts:
+            click.echo(f"{product}: skipped (no accessible browser account; saved history is unchanged).", err=True)
+        for account in accounts:
+            label = account.get("email") or account.get("organization_label") or account["account_id"]
+            click.echo(f"Refreshing {product}: {label}...", err=True)
+            try:
+                provider = browser_provider(product, account["account_id"], lambda: iter(accounts))
+                report = synchronize(provider, product, limit=100)
+                click.echo(json.dumps(report), err=True)
+                refreshed += 1
+            except (ProviderError, click.ClickException) as error:
+                errors.append(f"{product} ({label}): {error}")
+    if errors:
+        raise click.ClickException("Some accounts could not refresh; successful pulls were saved. " + "; ".join(errors))
+    if not refreshed:
+        raise click.ClickException("No supported account could be refreshed. Connect a browser account first.")
 
 
 def _scope_callback(sources, accounts=None):
@@ -122,6 +166,7 @@ def install(root, browser_accounts, claude_accounts):
     cached_accounts = _reader(root.commands["chats"], cloud_sources, "one-conv cloud")
     cached_accounts.name = "cached-accounts"
     cached_accounts.callback = root.commands["chats"].callback
+    cached_accounts.params = [parameter for parameter in cached_accounts.params if parameter.name != "refresh"]
     cached_accounts.help = "List saved account groups and their conversation counts without contacting providers."
     cached_accounts.epilog = "Examples:\n  one-conv cloud cached-accounts --json"
     for parameter in cached_accounts.params:

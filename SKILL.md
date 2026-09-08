@@ -46,6 +46,11 @@ Every cloud reader identifies saved history on stderr, keeping JSON stdout clean
 Product readers accept `--refresh` to pull up to 100 conversations before reading;
 failed refreshes return an error instead of silently displaying old results.
 The result still includes older saved conversations, not just the refreshed batch.
+`cloud chats --refresh` refreshes all accessible supported accounts across
+products (up to 100 conversations per account/product). It reports skipped
+sources explicitly and attempts all accounts before returning any refresh
+errors. `--source` restricts both refresh and listing. JSON stays on stdout;
+progress, skips, and sync reports go to stderr.
 
 `cloud claude connect --login --browser chrome` opens Claude sign-in. If Chrome
 already has another Claude account, switch accounts there or use a separate

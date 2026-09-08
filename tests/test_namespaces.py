@@ -160,6 +160,50 @@ def test_refresh_invokes_sync_before_read(app, saved_conversations, monkeypatch)
     assert calls == [100]
 
 
+@pytest.fixture
+def refresh_accounts(app, monkeypatch, saved_conversations):
+    calls = []
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter([{"account_id": "work"}]))
+    monkeypatch.setattr(app, "_chatgpt_accounts", lambda: iter([{"account_id": "personal"}, {"account_id": "work"}]))
+    monkeypatch.setattr(cloud_cli, "browser_provider", lambda product, selector, accounts: (product, selector))
+    monkeypatch.setattr(cloud_cli, "synchronize", lambda provider, product, limit: calls.append(provider) or {})
+    return calls
+
+
+def test_global_refresh_visits_all_supported_accounts(app, refresh_accounts):
+    CliRunner().invoke(app.cli, ["cloud", "chats", "--refresh", "--json"])
+    assert refresh_accounts == [("chatgpt", "personal"), ("chatgpt", "work"),
+                                ("claude-chat", "work"), ("codex-cloud", "personal"), ("codex-cloud", "work")]
+
+
+def test_global_refresh_respects_source_filter(app, refresh_accounts):
+    CliRunner().invoke(app.cli, ["cloud", "chats", "--refresh", "--source", "claude-chat", "--json"])
+    assert refresh_accounts == [("claude-chat", "work")]
+
+
+def test_global_refresh_keeps_stdout_json(app, refresh_accounts):
+    result = CliRunner().invoke(app.cli, ["cloud", "chats", "--refresh", "--json"])
+    assert [row["uuid"] for row in json.loads(result.stdout)] == ["second", "first"]
+
+
+def test_global_refresh_errors_do_not_prevent_other_accounts(app, refresh_accounts, monkeypatch):
+    from one_conv.providers.base import AuthenticationRequired
+    def provider(product, selector, accounts):
+        if product == "chatgpt":
+            raise AuthenticationRequired("Reconnect ChatGPT")
+        return product, selector
+    monkeypatch.setattr(cloud_cli, "browser_provider", provider)
+    CliRunner().invoke(app.cli, ["cloud", "chats", "--refresh", "--json"])
+    assert refresh_accounts == [("claude-chat", "work"), ("codex-cloud", "personal"), ("codex-cloud", "work")]
+
+
+def test_global_refresh_with_no_accounts_fails(app, saved_conversations, monkeypatch):
+    monkeypatch.setattr(app, "_claude_accounts", lambda: iter(()))
+    monkeypatch.setattr(app, "_chatgpt_accounts", lambda: iter(()))
+    result = CliRunner().invoke(app.cli, ["cloud", "chats", "--refresh", "--json"])
+    assert result.exit_code == 1
+
+
 def test_login_opens_selected_browser_without_keychain(app, monkeypatch):
     calls = []
     monkeypatch.setattr(sys, "platform", "darwin")
