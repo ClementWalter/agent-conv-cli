@@ -2277,14 +2277,14 @@ def _print_thread_rows(
         return
     turns_width = max(len(str(s["turns"])) for s in results)
     tokens_width = max(len(_format_tokens(s.get("tokens"))) for s in results)
-    cwd_width = max(len(s["cwd"]) for s in results) if show_cwd else 0
+    cwd_width = max(len(s.get("account_label") or s["cwd"]) for s in results) if show_cwd else 0
     source_width = max(len(s["source"]) for s in results) if show_source else 0
     for s in results:
         last = s["end"] or s["start"]
         mark = ("● " if s.get("unread") else "  ") if show_unread_mark else ""
         turns = f"{s['turns']:>{turns_width}} turns"
         tokens = f"{_format_tokens(s.get('tokens')):>{tokens_width}} tok"
-        cwd = f"{s['cwd']:<{cwd_width}}  " if show_cwd else ""
+        cwd = f"{s.get('account_label') or s['cwd']:<{cwd_width}}  " if show_cwd else ""
         source = f"[{s['source']:<{source_width}}]  " if show_source else ""
         click.echo(f"{mark}{_local_ts(last)}  {source}{cwd}[{s['uuid'][:8]}]  ({turns}, {tokens})  {s['title']}")
 
@@ -2334,6 +2334,19 @@ def chats(source_filter: str | None, limit: int, as_json: bool, conversations: b
     if conversations:
         handles = _all_sessions_for(list(_iter_all_projects(sources)))
         rows = [_handle_summary(handle, state) for handle in handles]
+        cached_labels = {account.get("account_id"): account.get("email")
+                         for account in _chatgpt_cached_accounts()}
+        # Labels are presentation metadata; account IDs remain stable cache keys.
+        for handle, row in zip(handles, rows):
+            if handle.path and handle.path.suffix == ".json":
+                try:
+                    row["account_label"] = json.loads(handle.path.read_text()).get("account_label")
+                except (OSError, ValueError, AttributeError):
+                    row["account_label"] = None
+            if not row.get("account_label"):
+                account_id = row["cwd"].partition(":")[2] or row["cwd"]
+                row["account_label"] = (cached_labels.get(account_id)
+                                        if row["source"] in ("chatgpt", "codex-cloud") else None) or account_id
         # Provider timestamps reflect activity; cache file times reflect downloads.
         rows.sort(key=lambda row: row["end"] or row["start"], reverse=True)
         rows = rows[:limit] if limit else rows
@@ -2341,6 +2354,7 @@ def chats(source_filter: str | None, limit: int, as_json: bool, conversations: b
             click.echo(json.dumps(rows, ensure_ascii=False))
         else:
             _print_thread_rows(rows, show_cwd=True, show_unread_mark=True, show_source=True)
+            click.echo("● Unread in one-conv (independent of the provider's read status).", err=True)
         return
     projects = sorted(
         (_project_summary_handle(p, state) for p in _iter_all_projects(sources)),

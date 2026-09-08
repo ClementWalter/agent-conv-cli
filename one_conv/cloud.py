@@ -93,6 +93,7 @@ def synchronize(provider, product: str, *, root: Path | None = None, limit: int 
                     report["incomplete_conversations"] += 1
                 document.update({"source": product, "machine": "cloud",
                                  "account_id": account.id,
+                                 "account_label": account.label,
                                  "session": _key(product, account.id, conversation.id),
                                  "cwd": f"{product}:{account.id}",
                                  "source_url": item.source_url,

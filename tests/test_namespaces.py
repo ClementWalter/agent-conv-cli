@@ -41,7 +41,8 @@ def saved_conversations(app, monkeypatch, tmp_path):
     }))
     (account / "second.json").write_text(json.dumps({
         "source": "claude-chat", "session": "second", "cwd": "claude-chat:personal",
-        "title": "Second conversation", "turns": [{"role": "user", "text": "Hi", "ts": "2026-02-01T00:00:00Z"}],
+        "title": "Second conversation", "account_label": "personal@example.test",
+        "turns": [{"role": "user", "text": "Hi", "ts": "2026-02-01T00:00:00Z"}],
     }))
     monkeypatch.setenv("ONE_CONV_CLOUD_CACHE", str(tmp_path))
     monkeypatch.setattr(app, "_chatgpt_iter_projects", lambda: iter(()))
@@ -70,6 +71,27 @@ def test_cached_accounts_preserves_group_counts(app, saved_conversations):
 def test_cloud_chats_human_output_has_titles(app, saved_conversations):
     result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--limit", "1"])
     assert "Second conversation" in result.output
+
+
+def test_cloud_chats_displays_account_label(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--limit", "1"])
+    assert "personal@example.test" in result.output
+
+
+def test_cloud_chats_json_preserves_account_identity(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--json", "--limit", "1"])
+    assert json.loads(result.output)[0]["cwd"] == "claude-chat:personal"
+
+
+def test_cloud_chats_explains_unread_marker(app, saved_conversations):
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats"])
+    assert "Unread in one-conv" in result.output
+
+
+def test_claude_does_not_inherit_openai_account_label(app, saved_conversations, monkeypatch):
+    monkeypatch.setattr(app, "_chatgpt_cached_accounts", lambda: [{"account_id": "personal", "email": "openai@example.test"}])
+    result = CliRunner().invoke(app.cli, ["cloud", "claude", "chats", "--json"])
+    assert json.loads(result.output)[1]["account_label"] == "personal"
 
 
 def test_cloud_chats_process_lists_individual_conversations(saved_conversations):

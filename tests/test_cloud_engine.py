@@ -63,6 +63,10 @@ def test_persists_provider_source(cached_document):
     assert cached_document["source"] == "claude-chat"
 
 
+def test_persists_account_display_label(cached_document):
+    assert cached_document["account_label"] == "account-a"
+
+
 def test_incomplete_message_window_is_not_ready(tmp_path, conversation):
     partial = replace(conversation, complete=False, coverage="current_branch")
     assert synchronize(ProviderStub(partial), "chatgpt", root=tmp_path)["state"] == "partial"
