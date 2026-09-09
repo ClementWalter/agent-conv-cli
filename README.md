@@ -203,12 +203,45 @@ See [PROVIDERS.md](PROVIDERS.md) for adapter boundaries, API-change handling,
 and verification evidence. `cloud providers` reports implementation coverage,
 not your accounts' live connection status.
 
-## MCP and hosted access
+## Local MCP server
 
-This repository currently provides a CLI and an agent skill. It does **not**
-implement or serve an MCP endpoint. A hosted conversation service, browser
-onboarding, and automatic session renewal are planned in
-[CLOUD_PLAN.md](CLOUD_PLAN.md), not shipped features.
+Run `one-conv mcp --config` to generate the JSON configuration for your MCP
+client. Merge its `one-conv` entry into the client's `mcpServers` configuration.
+The generated paths point to this checkout and its Python environment; regenerate
+the configuration if you move the checkout or remove that environment.
+
+Your client launches the server when needed. To launch it directly:
+
+```bash
+one-conv mcp
+```
+
+This uses stdio: the process waits for MCP messages, so it does not display a
+chat interface or open a network port. It uses the
+[official MCP Python SDK](https://py.sdk.modelcontextprotocol.io/).
+
+| Tool | Purpose |
+| --- | --- |
+| `list_chats` | Cloud conversations or local projects |
+| `read_conversation` | Cloud ID/title, or local project with optional session ID |
+| `search_conversations` | Search saved message text |
+| `find_conversations` | Find conversations by title |
+| `list_accounts` | Saved cloud account groups, without checking login validity |
+
+The readers accept `namespace="cloud"` (default) or `namespace="local"`,
+an optional source filter, and a result limit. Reads keep unread markers intact
+and hide tools/thinking unless `raw=true`. Responses include `data`, `freshness`,
+and `notices`, making saved-history reads explicit.
+
+Set `refresh=true` on cloud listing or reading to fetch accessible accounts
+before reading. Connect accounts through the CLI first; the MCP server does
+not perform interactive login. Refresh retains the CLI's limit of 100
+conversations per account and reports failures instead of silently returning
+stale data as fresh. Searches always use saved history.
+
+The server exposes history access and explicit refresh, with no message sending
+or arbitrary command execution. A hosted service and browser onboarding remain
+planned in [CLOUD_PLAN.md](CLOUD_PLAN.md).
 
 ## Command reference
 

@@ -1,0 +1,135 @@
+"""MCP tools preserve CLI boundaries and work through a real stdio connection."""
+
+import asyncio
+import json
+import os
+import subprocess
+import sys
+
+from mcp import Client
+from mcp.client.stdio import StdioServerParameters
+import pytest
+
+from one_conv import mcp_server
+
+
+@pytest.fixture
+def reader_stub(monkeypatch):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, '[{"uuid":"example"}]', 'Saved history only')
+
+    monkeypatch.setattr(mcp_server.subprocess, "run", run)
+    return calls
+
+
+def test_reader_returns_structured_history(reader_stub):
+    assert mcp_server.read_cli("cloud", "chats")["data"] == [{"uuid": "example"}]
+
+
+def test_reader_preserves_freshness(reader_stub):
+    assert mcp_server.read_cli("cloud", "chats")["freshness"] == "saved"
+
+
+def test_reader_protects_query_from_option_parsing(reader_stub):
+    mcp_server.read_cli("cloud", "read", query="--refresh")
+    assert reader_stub[0][0][-2:] == ["--", "--refresh"]
+
+
+def test_read_keeps_unread_state(reader_stub):
+    mcp_server.read_cli("cloud", "read", query="example")
+    assert "--no-mark-read" in reader_stub[0][0]
+
+
+def test_local_read_uses_thread(reader_stub):
+    mcp_server.read_cli("local", "read", query="project", session="abc")
+    assert reader_stub[0][0][4] == "thread"
+
+
+@pytest.mark.parametrize("fields", [
+    {"namespace": "invalid"}, {"source": "claude"}, {"limit": 0}, {"limit": 1001},
+    {"namespace": "local", "refresh": True}, {"session": "abc"},
+])
+def test_invalid_request_is_rejected(fields):
+    with pytest.raises(ValueError):
+        mcp_server.read_cli(**({"namespace": "cloud", "command": "chats"} | fields))
+
+
+def test_reader_reports_timeout(monkeypatch):
+    def run(*args, **kwargs):
+        raise subprocess.TimeoutExpired("reader", 60)
+
+    monkeypatch.setattr(mcp_server.subprocess, "run", run)
+    with pytest.raises(ValueError, match="timed out"):
+        mcp_server.read_cli("cloud", "chats")
+
+
+def test_reader_reports_cli_error(monkeypatch):
+    monkeypatch.setattr(mcp_server.subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a, 1, "", "No conversation matches"))
+    with pytest.raises(ValueError, match="No conversation matches"):
+        mcp_server.read_cli("cloud", "read", query="missing")
+
+
+@pytest.fixture
+def saved_history(tmp_path):
+    account = tmp_path / "account"
+    account.mkdir()
+    (account / "example.json").write_text(json.dumps({
+        "source": "claude-chat", "session": "mcp-example", "cwd": "claude-chat:test",
+        "title": "MCP example", "turns": [
+            {"role": "user", "text": "Hello MCP", "ts": "2026-01-01T00:00:00Z"},
+        ],
+    }))
+    return tmp_path
+
+
+def protocol_call(cache, tool, arguments):
+    """Use process pipes to exercise initialization, discovery, and real CLI delegation."""
+    async def call():
+        parameters = StdioServerParameters(
+            command=sys.executable, args=["-O", str(mcp_server.LAUNCHER), "mcp"],
+            env={**os.environ, "ONE_CONV_CLOUD_CACHE": str(cache)},
+        )
+        async with Client(parameters) as client:
+            if tool is None:
+                return await client.list_tools()
+            return await client.call_tool(tool, arguments)
+
+    return asyncio.run(call())
+
+
+def test_stdio_discovers_tools(saved_history):
+    result = protocol_call(saved_history, None, {})
+    assert {tool.name for tool in result.tools} == {
+        "list_chats", "read_conversation", "search_conversations", "find_conversations", "list_accounts",
+    }
+
+
+@pytest.mark.parametrize("tool,arguments", [
+    ("list_chats", {}), ("read_conversation", {"query": "mcp-example"}),
+    ("search_conversations", {"query": "Hello MCP"}),
+    ("find_conversations", {"query": "MCP example"}),
+])
+def test_stdio_reads_saved_history(saved_history, tool, arguments):
+    result = protocol_call(saved_history, tool, {"source": "claude-chat", **arguments})
+    assert "mcp-example" in json.dumps(result.structured_content)
+
+
+def test_stdio_reports_errors(saved_history):
+    result = protocol_call(saved_history, "read_conversation", {"query": "missing", "source": "claude-chat"})
+    assert result.is_error
+
+
+def test_generated_config_starts_server():
+    result = subprocess.run([sys.executable, "-O", str(mcp_server.LAUNCHER), "mcp", "--config"],
+                            capture_output=True, text=True, check=True, timeout=30)
+    config = json.loads(result.stdout)["mcpServers"]["one-conv"]
+
+    async def discover():
+        async with Client(StdioServerParameters(**config)) as client:
+            return await client.list_tools()
+
+    assert len(asyncio.run(discover()).tools) == 5

@@ -5,6 +5,7 @@
 #     "click==8.3.3",
 #     "curl_cffi==0.13.0",
 #     "pycryptodome==3.23.0",
+#     "mcp==2.2.0",
 # ]
 # ///
 """Read your own local Claude Code / Codex CLI / Cursor / Oh My Pi conversation history.
@@ -3447,6 +3448,24 @@ def cloud_command(context):
 
 
 install_namespaces(cli, lambda: _chatgpt_accounts(), lambda: _claude_accounts())
+
+
+@cli.command("mcp")
+@click.option("--config", is_flag=True, help="Print MCP client JSON with resolved paths, then exit.")
+def mcp_command(config):
+    """Serve conversation readers over local MCP stdio.
+
+    Examples:
+      one-conv mcp
+      one-conv mcp --config
+    """
+    from one_conv.mcp_server import create_server
+    if config:
+        click.echo(json.dumps({"mcpServers": {"one-conv": {
+            "command": sys.executable, "args": ["-O", str(Path(__file__).resolve()), "mcp"],
+        }}}, indent=2))
+        return
+    create_server().run(transport="stdio")
 
 
 if __name__ == "__main__":
