@@ -1,0 +1,39 @@
+{
+  "name": "oneconv-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build && esbuild service/main.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.mjs",
+    "start": "NODE_ENV=production node --env-file-if-exists=.env dist/server.mjs",
+    "test": "NODE_ENV=production vitest run",
+    "test:e2e": "NODE_ENV=production playwright test"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@hono/node-server": "^1.19.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "effect": "3.22.2",
+    "hono": "^4.9.0",
+    "jose": "^6.1.0",
+    "lucide-react": "^0.468.0",
+    "pg": "^8.16.0",
+    "playwright": "^1.55.0",
+    "react": "^19.1.0",
+    "react-aria-components": "^1.12.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "esbuild": "^0.25.0",
+    "prettier": "3.9.6",
+    "typescript": "^5.9.0",
+    "vite": "^6.3.0",
+    "vitest": "^3.2.0"
+  }
+}

@@ -1,0 +1,15 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["curl_cffi==0.13.0"]
+# ///
+"""Run a bounded provider ingestion job with private input and JSON output."""
+
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from one_conv.service_worker import main
+
+if __name__ == "__main__":
+    main()

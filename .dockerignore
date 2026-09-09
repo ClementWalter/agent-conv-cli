@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+.oneconv
+node_modules
+dist
+test-results
+playwright-report
+__pycache__
+*.pyc
+.pytest_cache

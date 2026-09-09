@@ -11,6 +11,13 @@ into a local history, or read sessions already saved by your coding tools.
 Cloud conversations are addressed by ID or title. Local sessions are grouped
 by the project where the agent ran.
 
+## Web workspace
+
+The repository includes a browser workspace with conversation search, account
+connections, and an authenticated HTTP MCP endpoint. See [WEB.md](WEB.md) for
+local startup, hosted configuration, security boundaries and verification status.
+The local workspace can import existing CLI history without another provider login.
+
 ## Install
 
 You need Python 3.11+ and [uv](https://docs.astral.sh/uv/). The launcher declares
@@ -240,8 +247,9 @@ conversations per account and reports failures instead of silently returning
 stale data as fresh. Searches always use saved history.
 
 The server exposes history access and explicit refresh, with no message sending
-or arbitrary command execution. A hosted service and browser onboarding remain
-planned in [CLOUD_PLAN.md](CLOUD_PLAN.md).
+or arbitrary command execution. The separate [web service](WEB.md) implements
+HTTP MCP and browser onboarding; its hosted identity and provider login integrations
+still require live verification with deployment credentials.
 
 The proposed hosted product's optional trace contribution, training/licensing
 boundaries and confidential-computing scope are drafted in

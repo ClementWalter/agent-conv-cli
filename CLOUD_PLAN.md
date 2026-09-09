@@ -1,7 +1,9 @@
 # One-conv cloud delivery plan
 
 Planning baseline: 2026-09-09. This document assigns implementation work; it does
-not claim those features are implemented or deployed.
+not claim every feature below is implemented or deployed. The web workspace,
+HTTP MCP service and worker now have an implementation; [WEB.md](WEB.md) tracks
+their verified behavior and remaining hosted integration checks.
 
 ## Product and scope
 

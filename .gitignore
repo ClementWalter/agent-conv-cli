@@ -10,3 +10,9 @@ __pycache__/
 # Built artifacts
 build/
 dist/
+node_modules/
+dist/
+.env
+.oneconv/
+test-results/
+playwright-report/

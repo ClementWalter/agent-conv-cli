@@ -106,7 +106,8 @@ cannot read” claim is enabled until the deployed threat model is verified.
 ## Delivery status and acceptance
 
 Implemented: pure eligibility decisions with rejection reasons and unit tests.
-Not implemented: hosted account creation, persisted consent, billing integration,
+Hosted account creation has an AuthKit implementation awaiting live verification.
+Not implemented: persisted consent, billing integration,
 screening, training, buyer exports, withdrawal propagation or confidential compute.
 No existing user's history becomes authorized through this document.
 
