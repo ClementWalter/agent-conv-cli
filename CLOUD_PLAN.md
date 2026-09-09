@@ -59,19 +59,37 @@ further access work before changing the launch promise.
 
 ## Shared architecture and contracts
 
-Use one repository and a modular Python backend rather than independent
-microservices. Proposed stack: FastAPI, official MCP Python SDK, PostgreSQL
-with full-text search, private object storage, and a separate ingestion worker
-using durable PostgreSQL jobs. A browser frontend can use React/TypeScript.
-Select and pin supported dependency versions during implementation; the
-existing stdio package pin does not establish current HTTP auth compatibility.
-Semantic search and generated summaries follow a measured retrieval baseline.
+Use one repository with a TypeScript/Effect hosted API and orchestration layer,
+a React/TypeScript/Vite frontend, and Python provider workers. Keep the tested
+one-conv parsers and provider adapters in Python. The existing Python stdio MCP
+remains available for local clients; the hosted endpoint uses the official
+TypeScript MCP SDK with authorization and tenant scope supplied by the service.
+There is no additional FastAPI tier in this design.
 
-Run API/MCP, frontend and worker as separate deployable processes. Share typed
-domain and storage modules. MCP queries the persisted index and never blocks
-on provider backfill. Workers use bounded retries, jitter, per-account rate
-limits, leases and resumable cursors. A partial or failed scan never implies
-that unseen conversations were deleted.
+Effect owns typed errors, dependency boundaries, request cancellation, timeouts,
+bounded concurrency and retry policies. Model authorization expiry, rate limits,
+schema drift and transient transport failure separately. Only transient failures
+are retried; authorization expiry produces a reconnect state. Persist jobs and
+cursors in PostgreSQL: in-memory fibers and schedules alone are not durable jobs.
+
+Use Effect Schema for web/API contracts and versioned JSON Schema fixtures for
+the TypeScript/Python worker boundary. Both runtimes validate shared fixtures,
+including authorization and contribution-policy decisions, to prevent drift.
+Workers receive tenant-bound job IDs and resolve scoped credentials internally;
+provider secrets are never placed in queue payloads or MCP arguments.
+
+Proposed managed deployment: Docker API/MCP and Python worker on Render, static
+frontend, managed PostgreSQL with full-text search, private R2 object storage,
+WorkOS AuthKit for user login and MCP OAuth, and Browserbase for isolated login
+sessions. Verify hosted provider login before claiming connector availability.
+Pin tested dependency versions during implementation; the local MCP SDK pin
+does not establish hosted client interoperability. TEE processing is a separate
+deployment track under DATA_POLICY.md.
+
+MCP queries the persisted tenant-scoped index and never blocks on provider
+backfill. Workers use bounded retries, jitter, per-account rate limits, leases
+and resumable cursors. A partial scan never implies that unseen conversations
+were deleted. Semantic search follows a measured full-text retrieval baseline.
 
 Freeze these contracts before integrating parallel implementations:
 
@@ -130,6 +148,10 @@ behavior before beta. Revoked assistant grants fail on the next request.
 
 ## Web experience and distribution
 
+Follow [DESIGN.md](DESIGN.md) for the visual system, interaction states and
+browser acceptance criteria. React Aria supplies accessible behavior; custom
+tokens and components define OneConv's appearance.
+
 The primary path is Create account -> Connect OpenAI / Connect Claude -> Copy
 MCP URL -> Authorize assistant. Use an isolated hosted browser for provider
 login and MFA, then verify product/account/workspace coverage before reporting
@@ -162,10 +184,10 @@ packages are the implementation allocation; they are not running code changes.
 
 | Package | Owner role | Deliverable and file boundary | Depends on |
 | --- | --- | --- | --- |
-| C0 | Lead integrator | Domain contracts, capability schema, API examples, migration skeleton in `one_conv/domain/` and `docs/contracts/` | None |
+| C0 | Lead integrator | Effect Schema domain contracts, capability schema, migrations and cross-language fixtures in `service/` and `docs/contracts/` | None |
 | A1 | Anthropic source agent | Claude export adapter and separate Chat/Cowork access proofs in `one_conv/providers/anthropic/`, source fixtures/tests | C0 for integration; access proof starts immediately |
 | O1 | OpenAI source agent | ChatGPT export adapter, transport/auth separation and Codex-cloud access proof in `one_conv/providers/openai/`, source fixtures/tests | C0 for integration; access proof starts immediately |
-| B1 | Hosted backend agent | Tenant storage, jobs, authorization, read API and HTTP MCP in `one_conv/service/`, `one_conv/storage/` | C0 |
+| B1 | Hosted backend agent | TypeScript/Effect tenant storage, jobs, authorization, read API and HTTP MCP in `service/`; Python provider worker boundary | C0 |
 | U1 | Web/distribution agent | Sources, search/reader, assistant consent/setup in `web/`; browser acceptance tests | C0 examples; can use explicit stubs |
 | Q1 | Lead integrator | Cross-provider/client e2e, deployment, operational checks and release evidence in `tests/e2e/`, `deploy/` | B1 plus one source; then U1 and second source |
 | C1 | Lead integrator | Optional cloud-mode CLI facade using the same read service, preserving local defaults | Stable B1 API; not required for no-Terminal alpha |
