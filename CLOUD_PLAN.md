@@ -1,6 +1,6 @@
 # One-conv cloud delivery plan
 
-Planning baseline: 2026-09-08. This document assigns implementation work; it does
+Planning baseline: 2026-09-09. This document assigns implementation work; it does
 not claim those features are implemented or deployed.
 
 ## Product and scope
@@ -16,17 +16,21 @@ Deliver a browser-only web application, cloud ingestion and storage, search,
 conversation reading, and hosted MCP. User setup never requires a Terminal,
 copied token, local cookie database, desktop companion or personal Box.
 Local readers remain supported by the existing CLI but are outside this release.
-Autonomous workers, general service credentials, model hosting and a new chat
-interface are outside scope. No collective model training from customer content.
+Autonomous workers, general service credentials and a new chat interface are
+outside the initial hosted-MCP release. Separately authorized interaction traces
+can support OneConv training and third-party dataset licensing under
+[DATA_POLICY.md](DATA_POLICY.md). Contribution is optional, paid accounts are
+excluded, and existing history is not automatically eligible. Reuse and
+confidential compute are separate delivery tracks from the initial MCP service.
 
 ## Current evidence and access gates
 
-The CLI currently reads Claude Code, Codex, Cursor and Oh My Pi local stores,
-a normalized corpus, and ChatGPT through a local Chromium session. Its handles
-are filesystem-oriented; its ChatGPT transport is not hosted user onboarding.
-The OneBrain MCP is local stdio with OS-user permissions and subprocess tools;
-it is not a multi-user cloud server. Reuse parsing and validation ideas, not
-those authentication or execution assumptions.
+The CLI reads Claude Code, Codex, Cursor and Oh My Pi local stores, a normalized
+corpus, and ChatGPT, Claude Chat, Codex cloud and Cowork cloud via locally
+authorized browser sessions. Its local MCP server exposes five history tools
+over stdio. These are working local components, not hosted user onboarding or
+a multi-user cloud service. Reuse adapters and normalization; replace OS-user
+scope and subprocess history discovery with authenticated tenant-scoped reads.
 
 | Source | Documented route | Work required before claiming live support |
 | --- | --- | --- |
@@ -125,6 +129,14 @@ using a source generation/tombstone check. Publish backup retention and purge
 behavior before beta. Revoked assistant grants fail on the next request.
 
 ## Web experience and distribution
+
+The primary path is Create account -> Connect OpenAI / Connect Claude -> Copy
+MCP URL -> Authorize assistant. Use an isolated hosted browser for provider
+login and MFA, then verify product/account/workspace coverage before reporting
+success. This login path remains unverified until tested live on both providers.
+User identity, provider sessions and assistant OAuth grants are separate.
+Optional contribution controls follow [DATA_POLICY.md](DATA_POLICY.md); never
+combine provider connection consent with training or resale permission.
 
 Provide separate Sources and Assistants screens plus a minimal search/reader.
 Sources show exact covered products, account/workspace, count and freshness.

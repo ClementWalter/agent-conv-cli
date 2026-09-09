@@ -243,6 +243,10 @@ The server exposes history access and explicit refresh, with no message sending
 or arbitrary command execution. A hosted service and browser onboarding remain
 planned in [CLOUD_PLAN.md](CLOUD_PLAN.md).
 
+The proposed hosted product's optional trace contribution, training/licensing
+boundaries and confidential-computing scope are drafted in
+[DATA_POLICY.md](DATA_POLICY.md). Dataset reuse is not implemented or enabled.
+
 ## Command reference
 
 Start with `one-conv --help`, `one-conv cloud --help`, or `one-conv local --help`.
