@@ -20,11 +20,8 @@ async function browserbase(path: string, body?: unknown) {
 export async function startLogin(provider: string, contextId?: string) {
   const context = contextId
     ? { id: contextId }
-    : await browserbase("/contexts", {
-        projectId: process.env.BROWSERBASE_PROJECT_ID,
-      });
+    : await browserbase("/contexts", {});
   const session = await browserbase("/sessions", {
-    projectId: process.env.BROWSERBASE_PROJECT_ID,
     browserSettings: {
       context: { id: context.id, persist: true },
       recordSession: false,
@@ -95,7 +92,6 @@ export async function finishLogin(provider: string, sessionId: string) {
 
 export async function releaseLogin(sessionId: string) {
   await browserbase(`/sessions/${sessionId}`, {
-    projectId: process.env.BROWSERBASE_PROJECT_ID,
     status: "REQUEST_RELEASE",
   });
 }

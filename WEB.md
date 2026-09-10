@@ -44,7 +44,7 @@ operator credentials through the deployment's secret environment, using
 | `SESSION_ENCRYPTION_KEY` | Base64-encoded 32-byte key, shared by web and worker |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | AuthKit account sign-in |
 | `WORKOS_AUTHKIT_DOMAIN` | HTTPS AuthKit issuer for MCP OAuth |
-| `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID` | Isolated hosted login browsers |
+| `BROWSERBASE_API_KEY` | Isolated hosted login browsers |
 
 Register the public `/auth/callback` URL in WorkOS. Configure MCP authorization
 in WorkOS for the resource audience `<PUBLIC_URL>/mcp`, the `conversations:read` scope,
@@ -108,6 +108,9 @@ Browser tests use installed Google Chrome by default. Set `PLAYWRIGHT_CHANNEL`
 to another installed Playwright-compatible channel when needed.
 
 Not yet verified: public deployment, live AuthKit OAuth,
-hosted provider login, and scheduled live ingestion. These require the configured
+completed provider authentication, and scheduled live ingestion. Browserbase
+API-key-only access and a live Claude login window have been verified through
+the local app; completing the provider sign-in still requires the account owner.
+The remaining checks require the configured
 external services. Existing CLI verification does not substitute for hosted login
 verification. No hosted URL is claimed as live.

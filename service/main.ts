@@ -31,9 +31,7 @@ const app = createApp(store, {
   workosId: process.env.WORKOS_CLIENT_ID,
   workosKey: process.env.WORKOS_API_KEY,
   issuer: process.env.WORKOS_AUTHKIT_DOMAIN?.replace(/\/$/, ""),
-  browserReady: Boolean(
-    process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID,
-  ),
+  browserReady: Boolean(process.env.BROWSERBASE_API_KEY),
 });
 app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 app.get("*", serveStatic({ root: "./dist/public" }));

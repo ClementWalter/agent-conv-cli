@@ -34,6 +34,7 @@ export default defineConfig({
     timeout: 60000,
     env: {
       APP_MODE: "local",
+      BROWSERBASE_API_KEY: "",
       PORT: "4311",
       PUBLIC_URL: "http://127.0.0.1:4311",
       LOCAL_DATABASE_DIR: join(root, "db"),
