@@ -94,6 +94,9 @@ not implemented; see [DATA_POLICY.md](DATA_POLICY.md).
 Verified locally: production build, tenant isolation, credential binding, scoped
 MCP reads and revocation, stale-job rejection, browser sign-in/import/read flows,
 mobile layout, and an actual HTTP MCP SDK client reading imported history.
+The Linux ARM64 Docker image builds and runs: its HTTP health endpoint returns
+200 and the packaged Python worker completes an empty-cache import. This does
+not verify hosted PostgreSQL, provider access or the deployment's CPU platform.
 
 ```bash
 npm test
@@ -104,7 +107,7 @@ npm run test:e2e
 Browser tests use installed Google Chrome by default. Set `PLAYWRIGHT_CHANNEL`
 to another installed Playwright-compatible channel when needed.
 
-Not yet verified: public deployment, Docker image execution, live AuthKit OAuth,
+Not yet verified: public deployment, live AuthKit OAuth,
 hosted provider login, and scheduled live ingestion. These require the configured
 external services. Existing CLI verification does not substitute for hosted login
 verification. No hosted URL is claimed as live.
