@@ -31,3 +31,40 @@ test("provider configuration failure is explained", async ({ page }) => {
   await page.getByRole("button", { name: "Connect an account" }).click();
   await expect(page.getByText(/Hosted login is not configured/)).toBeVisible();
 });
+test("embedded login follows the Google popup", async ({ page }) => {
+  await page.route("**/api/connections", async (route) => {
+    if (route.request().method() === "POST")
+      await route.fulfill({
+        json: {
+          id: "login-test",
+          url: "https://www.browserbase.com/test-opener",
+        },
+      });
+    else await route.fulfill({ json: [] });
+  });
+  await page.route("**/api/connections/login-test/live", (route) =>
+    route.fulfill({
+      json: {
+        expired: false,
+        pageId: "google-popup",
+        title: "Sign in - Google Accounts",
+        url: "https://www.browserbase.com/test-google",
+      },
+    }),
+  );
+  await page.route("https://www.browserbase.com/**", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<p>Provider login test fixture</p>",
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open local workspace" }).click();
+  await page
+    .getByRole("button", { name: "Connect", exact: true })
+    .first()
+    .click();
+  await expect(
+    page.locator('iframe[title="Provider sign-in"]'),
+  ).toHaveAttribute("src", "https://www.browserbase.com/test-google");
+});

@@ -1,6 +1,27 @@
 /** Hosted browser sessions isolate provider login from OneConv identity and MCP grants. */
 import { chromium } from "playwright";
 
+/** OAuth popups are separate live views; following the newest tab preserves the opener. */
+export function selectLoginPage(debug: any) {
+  const pages = debug.pages || [];
+  const page = pages.at(-1);
+  return {
+    pageId: page?.id || "session",
+    url: page?.debuggerFullscreenUrl || debug.debuggerFullscreenUrl,
+    title: page?.title || "Provider sign-in",
+    tabs: pages.length,
+  };
+}
+
+export async function loginView(sessionId: string) {
+  const session = await browserbase(`/sessions/${sessionId}`);
+  if (session.status !== "RUNNING") return { expired: true };
+  return {
+    expired: false,
+    ...selectLoginPage(await browserbase(`/sessions/${sessionId}/debug`)),
+  };
+}
+
 async function browserbase(path: string, body?: unknown) {
   const response = await fetch(`https://api.browserbase.com/v1${path}`, {
     method: body ? "POST" : "GET",

@@ -95,9 +95,48 @@ function App() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [connect, setConnect] = useState(false),
-    [login, setLogin] = useState<{ id: string; url: string } | null>(null);
+    [login, setLogin] = useState<{
+      id: string;
+      url: string;
+      pageId?: string;
+    } | null>(null);
   const [secret, setSecret] = useState(""),
     [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
+  const [loginProgress, setLoginProgress] = useState("Waiting for sign-in…");
+  const [loginExpired, setLoginExpired] = useState(false);
+  useEffect(() => {
+    if (!login?.id) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    setLoginExpired(false);
+    const poll = async () => {
+      try {
+        const view = await api(`/api/connections/${login.id}/live`);
+        if (stopped) return;
+        setLoginExpired(view.expired);
+        setLoginProgress(
+          view.expired
+            ? "This login expired. Close this window and reconnect."
+            : view.title,
+        );
+        if (!view.expired && view.url)
+          setLogin((current) =>
+            current?.id === login.id && current.pageId !== view.pageId
+              ? { ...current, url: view.url, pageId: view.pageId }
+              : current,
+          );
+      } catch {
+        if (!stopped)
+          setLoginProgress("Unable to update the login window. Retrying…");
+      }
+      if (!stopped) timer = setTimeout(poll, 2500);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [login?.id]);
   async function refresh() {
     const requestedQuery = queryRef.current;
     const [sources, history, access] = await Promise.all([
@@ -870,7 +909,7 @@ function App() {
         isDismissable
         className="overlay"
       >
-        <Modal className="modal">
+        <Modal className={login ? "modal login-modal" : "modal"}>
           <Dialog aria-label="Connect an AI account">
             {({ close }) => (
               <>
@@ -883,19 +922,33 @@ function App() {
                 </Button>
                 <Mark small />
                 <h2>
-                  {login
-                    ? "Your account, securely connected."
-                    : "Where do you think?"}
+                  {login ? "Sign in to your account" : "Where do you think?"}
                 </h2>
                 <p>
                   {login
-                    ? "Open the provider’s login window, finish signing in, then come back here to verify access."
+                    ? "Sign in below. Google and other sign-in windows appear here automatically. Then verify your connection."
                     : "Connect your existing AI subscription. You’ll sign in directly with your provider."}
                 </p>
                 {login ? (
                   <>
+                    <div role="status" className="login-progress">
+                      <LoaderCircle
+                        size={16}
+                        className={loginExpired ? "" : "spin"}
+                      />
+                      {loginProgress}
+                    </div>
+                    {!loginExpired && (
+                      <iframe
+                        title="Provider sign-in"
+                        className="login-frame"
+                        src={login.url}
+                        sandbox="allow-same-origin allow-scripts"
+                        allow="clipboard-read; clipboard-write"
+                      />
+                    )}
                     <a
-                      className="primary"
+                      className="text-button"
                       href={login.url}
                       target="_blank"
                       rel="noreferrer"

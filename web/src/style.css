@@ -1461,3 +1461,26 @@ small {
     scroll-behavior: auto !important;
   }
 }
+
+/* The sign-in browser needs room for provider forms without overflowing small windows. */
+.modal.login-modal {
+  width: 1000px;
+  max-height: 94dvh;
+  overflow-y: auto;
+  padding: 24px;
+}
+.login-frame {
+  width: 100%;
+  height: min(58dvh, 650px);
+  min-height: 260px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+}
+.login-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 14px;
+}

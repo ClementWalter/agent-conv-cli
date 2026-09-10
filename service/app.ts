@@ -13,6 +13,7 @@ import {
   finishLogin,
   releaseLogin,
   deleteContext,
+  loginView,
 } from "./browser";
 import { runPython, persistDocuments } from "./worker";
 
@@ -102,7 +103,7 @@ export function createApp(store: Store, config: Config) {
     c.header("Cache-Control", "no-store");
     c.header(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src https://www.browserbase.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
     if (!config.local)
       c.header("Strict-Transport-Security", "max-age=31536000");
@@ -264,6 +265,21 @@ export function createApp(store: Store, config: Config) {
         ],
       );
       return c.json({ id, url: browser.url });
+    }),
+  );
+  app.get(
+    "/api/connections/:id/live",
+    wrap(async (c) => {
+      const owner = await user(c);
+      const connection = (
+        await store.query(
+          "SELECT browser_id,status FROM connections WHERE user_id=$1 AND id=$2",
+          [owner.id, c.req.param("id")],
+        )
+      )[0];
+      if (!connection?.browser_id || connection.status !== "authorizing")
+        throw new Failure(404, "Active login not found.");
+      return c.json(await loginView(connection.browser_id));
     }),
   );
   app.post(
