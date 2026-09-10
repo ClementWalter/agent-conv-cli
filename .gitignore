@@ -10,9 +10,10 @@ __pycache__/
 # Built artifacts
 build/
 dist/
-node_modules/
-dist/
+
+# Private local configuration is never published.
 .env
 .oneconv/
+node_modules/
 test-results/
 playwright-report/
