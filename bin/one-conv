@@ -1799,8 +1799,12 @@ def _corpus_load(path: Path) -> dict | None:
     return doc
 
 
-def _corpus_iter_projects():
-    grouped: dict[str, list[tuple[Path, dict]]] = {}
+def _corpus_project_index() -> dict[str, list[SessionHandle]]:
+    """Scan once per CLI invocation without retaining complete transcripts in memory."""
+    context = click.get_current_context(silent=True)
+    if context is not None and "corpus_index" in context.meta:
+        return context.meta["corpus_index"]
+    grouped: dict[str, list[SessionHandle]] = {}
     for root in _corpus_roots():
         for path in root.rglob("*.json"):
             if path.name.startswith("."):
@@ -1809,29 +1813,12 @@ def _corpus_iter_projects():
             if doc is None:
                 continue
             cwd = doc.get("cwd") or "brain"
-            grouped.setdefault(cwd, []).append((path, doc))
-    for cwd, rows in grouped.items():
-        yield ProjectHandle(source="corpus", cwd=cwd, key=cwd)
-
-
-def _corpus_project_sessions(project: ProjectHandle) -> list[SessionHandle]:
-    handles = []
-    for root in _corpus_roots():
-        for path in root.rglob("*.json"):
-            if path.name.startswith("."):
-                continue
-            doc = _corpus_load(path)
-            if doc is None:
-                continue
-            cwd = doc.get("cwd") or "brain"
-            if cwd != project.key:
-                continue
             last = doc.get("last") or doc.get("started") or ""
             try:
                 mtime = datetime.fromisoformat(last).timestamp() if last else path.stat().st_mtime
             except ValueError:
                 mtime = path.stat().st_mtime
-            handles.append(
+            grouped.setdefault(cwd, []).append(
                 SessionHandle(
                     source="corpus",
                     uuid=str(doc.get("session")),
@@ -1841,8 +1828,21 @@ def _corpus_project_sessions(project: ProjectHandle) -> list[SessionHandle]:
                     title_hint=doc.get("title"),
                 )
             )
-    handles.sort(key=lambda h: h.mtime, reverse=True)
-    return handles
+    for handles in grouped.values():
+        handles.sort(key=lambda h: h.mtime, reverse=True)
+    if context is not None:
+        context.meta["corpus_index"] = grouped
+    return grouped
+
+
+
+def _corpus_iter_projects():
+    for cwd in _corpus_project_index():
+        yield ProjectHandle(source="corpus", cwd=cwd, key=cwd)
+
+
+def _corpus_project_sessions(project: ProjectHandle) -> list[SessionHandle]:
+    return _corpus_project_index().get(project.key, [])
 
 
 def _corpus_iter_turns(path: Path) -> list[Turn]:
@@ -2363,6 +2363,7 @@ def chats(source_filter: str | None, limit: int, as_json: bool, conversations: b
             click.echo("● Unread in one-conv (independent of the provider's read status).", err=True)
             click.echo("Read a conversation: one-conv cloud read ID", err=True)
         return
+    click.echo("Scanning saved local history…", err=True)
     projects = sorted(
         (_project_summary_handle(p, state) for p in _iter_all_projects(sources)),
         key=lambda s: s["last_active_epoch"],

@@ -74,3 +74,18 @@ def test_append_writes_the_brain_session(tmp_path, monkeypatch):
 def test_canonical_corpus_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("ONE_CONV_CORPUS", str(tmp_path))
     assert tmp_path in ac._corpus_roots()
+
+
+def test_project_listing_loads_each_document_once(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from unittest.mock import Mock
+    monkeypatch.setenv("ONE_CONV_CORPUS", str(tmp_path))
+    _write_session(tmp_path, "box", "brain", "first", "one")
+    second = _write_session(tmp_path, "box", "brain", "second", "two")
+    document = json.loads(second.read_text())
+    document["cwd"] = "second-project"
+    second.write_text(json.dumps(document))
+    load = Mock(wraps=ac._corpus_load)
+    monkeypatch.setattr(ac, "_corpus_load", load)
+    CliRunner().invoke(ac.cli, ["local", "chats", "--source", "corpus", "--json"])
+    assert load.call_count == 2
